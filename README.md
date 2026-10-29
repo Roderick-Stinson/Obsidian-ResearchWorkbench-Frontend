@@ -6,13 +6,15 @@
 
 ## 安装
 
+第一次用的话，先看后端 README 里的[从零开始](https://github.com/Roderick-Stinson/Obsidian-ResearchWorkbench-Backend#从零开始)：要写哪个配置文件、先做什么后做什么都在那里。下面只是面板本身的安装。
+
 1. 把 `论文工作台/` 文件夹整个放到 vault 根目录，保持 `论文面板.md` 与 `面板组件/` 同级。
 2. 安装并启用 [Dataview](https://github.com/blacksmithgu/obsidian-dataview) 插件，在它的设置里打开 JavaScript 查询。
 3. 按后端仓库的 README 安装并启动后端：
    ```bash
    cd ~/PaperWorkbench && .venv/bin/python -m pwb serve
    ```
-4. 打开 `论文面板.md`，切到阅读视图。右上角显示“后端已连接”就可以用了。`我的研究领域.md` 是关键词树的编辑页。
+4. 打开 `论文面板.md`，切到阅读视图。右上角显示“后端已连接”就可以用了。`我的研究领域.md` 是关键词树的编辑页：先在这里“添加一级领域”，再到“关注论文”页贴几篇代表论文的 arXiv 链接。
 5. 后端地址默认是 `http://127.0.0.1:8765/api/v1`。要改地址或设置 token，在面板“设置 → 后端连接”里改，会保存到 `面板组件/config.json`（这个文件不要提交，里面可能有 token）。
 
 后端没启动时，面板显示上次成功同步的数据（缓存在 Obsidian 本地，不写进 vault），并提示“后端未连接”。改了 `view.js` 或 `view.css` 之后，用命令面板运行 `Dataview: Rebuild current view`。

@@ -272,23 +272,25 @@ async function uploadPdf(paperId, file) {
   const content = await file.arrayBuffer();
   return act(() => http('PUT', '/papers/' + enc(paperId) + '/pdf', { body: content, raw: true }), '已上传 PDF');
 }
-function addOwnPaperForm(parent) {
+// 添加论文：本人论文或关注论文。给了 arXiv / OpenReview 链接的，标题可以不填，后端在后台补全信息、下载 PDF。
+function addPaperForm(parent, mark) {
   const form = H(parent, 'div', 'rpd-kw-form');
-  const title = H(form, 'input', 'rpd-input'); title.placeholder = '论文标题';
-  const url = H(form, 'input', 'rpd-input'); url.placeholder = 'OpenReview / arXiv 链接（可选；已在论文库里的会直接标为本人论文）';
+  const url = H(form, 'input', 'rpd-input'); url.placeholder = 'arXiv / OpenReview 链接（已在论文库里的会直接加上标记）';
+  const title = H(form, 'input', 'rpd-input'); title.placeholder = mark === 'own' ? '论文标题（有 arXiv 链接时可不填；没有链接的稿子必填）' : '论文标题（有 arXiv 链接时可不填）';
   const bar = H(form, 'div', 'rpd-tools'); let file = null;
   const fileLabel = H(bar, 'span', 'rpd-muted', '未选 PDF');
   btn(bar, '选择 PDF', '', async () => { file = await pickPdf(); fileLabel.setText(file ? file.name : '未选 PDF'); });
   btn(bar, '添加', 'rpd-primary', async () => {
-    if (!title.value.trim()) return toast('请填写标题');
-    const body = { title: title.value.trim(), own: true }; if (url.value.trim()) body.url = url.value.trim();
-    const paper = await act(() => http('POST', '/papers', { body }), '已添加本人论文');
+    const link = url.value.trim(), name = title.value.trim();
+    if (!link && !name) return toast('请填写链接或标题');
+    const body = { [mark]: true }; if (link) body.url = link; if (name) body.title = name;
+    const paper = await act(() => http('POST', '/papers', { body }), link && !file ? '已添加，后台正在补全信息、下载 PDF，稍后刷新' : '已添加');
     if (!paper) return;
     if (file) await uploadPdf(paper.id, file);
     render();
   });
   btn(bar, '取消', 'rpd-ghost', () => form.remove());
-  title.focus();
+  url.focus();
 }
 
 // ---------- 页签状态 ----------
@@ -472,6 +474,8 @@ R.watched = async c => {
   const filter = H(bar, 'select', 'rpd-select'); filter.setAttribute('aria-label', '筛选讨论状态');
   ['全部', ...DISCUSSION].forEach(value => { const option = H(filter, 'option', '', value); option.value = value; }); filter.value = T.watched.status;
   btn(bar, '刷新', '', () => render());
+  btn(bar, '添加关注论文', 'rpd-primary', () => addPaperForm(formSlot, 'watched'));
+  const formSlot = H(c, 'div');
   const res = await get('/papers?watched=true&limit=200');
   const data = shown(c, res, '关注论文');
   if (!data) return;
@@ -480,7 +484,7 @@ R.watched = async c => {
     list.empty(); const query = T.watched.q.trim().toLowerCase();
     const rows = data.items.filter(p => (T.watched.status === '全部' || p.user.discussionStatus === T.watched.status) && [p.title, p.titleZh, p.id, p.firstAuthor, p.year, p.venue, p.publicationStatus].join(' ').toLowerCase().includes(query));
     count.setText('重点关注 · ' + rows.length + ' / ' + data.total + ' 篇');
-    if (!rows.length) return empty(list, data.items.length ? '没有符合条件的关注论文。' : '还没有重点关注的论文。在论文推荐或论文库里点“重点关注”即可加入。');
+    if (!rows.length) return empty(list, data.items.length ? '没有符合条件的关注论文。' : '还没有重点关注的论文。点“添加关注论文”贴上链接，或在论文推荐、论文库里点“重点关注”。整理关键词时会读这些论文的 PDF。');
     table(list, ['论文', '讨论状态', '发表状态', '发表来源', '年份', '第一作者', '被引', '资料'], rows.map(p => [
       td => { H(td, 'div', 'rpd-row-t', paperTitle(p)); if (p.titleZh && titleKnown(p)) H(td, 'div', 'rpd-en', p.title); titleTools(H(td, 'div', 'rpd-tools'), p, fill); },
       td => selectCell(td, DISCUSSION, p.user.discussionStatus || '', '未设置', async v => { const u = await act(() => http('PATCH', '/me/papers/' + enc(p.id), { body: { discussionStatus: v || null } }), '讨论状态已保存'); if (u) p.user = u; return !!u; }),
@@ -658,7 +662,7 @@ R.map = async c => {
   else table(c, ['技术路线', '论文数', '说明'], data.categories.map(k => [k.name, k.paperCount + ' 篇', k.note]));
 };
 
-// 全领域热点演变：每个热点一行，按起势时间排；小图是它每月占智能体论文的比例（三个月平均）。
+// 全领域热点演变：每个热点一行，按起势时间排；小图是它每月占 arXiv 论文流的比例（三个月平均）。
 const hotspotTimeline = (c, hot) => {
   if (!hot || !hot.items.length) return empty(c, '还没有全领域论文数据：后端运行 pwb feed 取 arXiv 论文后，再点“重新整理”。');
   const months = hot.months;
@@ -915,7 +919,7 @@ R.research = async c => {
 
   const own = sec(c, '本人论文', '存在后端论文库里；整理关键词时读它们的 PDF 原文');
   const ownTools = H(own, 'div', 'rpd-tools'); const formSlot = H(own, 'div');
-  btn(ownTools, '添加本人论文', 'rpd-primary', () => addOwnPaperForm(formSlot));
+  btn(ownTools, '添加本人论文', 'rpd-primary', () => addPaperForm(formSlot, 'own'));
   const owned = shown(own, ownRes, '本人论文');
   if (owned && !owned.items.length) empty(own, '还没有本人论文。点“添加本人论文”，或在论文库里把论文标为“本人论文”。');
   (owned?.items || []).forEach(p => {
