@@ -14,8 +14,10 @@ const enc = encodeURIComponent;
 const num = v => v == null ? '—' : String(v);
 let toastEl, toastTimer;
 function toast(msg) { toastEl.setText(msg); toastEl.addClass('is-show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => toastEl.removeClass('is-show'), 3200); }
-const ymd = d => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
-const fmtTime = v => { const d = new Date(v); return Number.isFinite(d.getTime()) ? d.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : String(v || '—'); };
+// 时区跟后端一致（后端的 PWB_TZ，默认后端所在机器的时区）；连不上后端时用本机时区。
+let TZ_NAME;
+const ymd = d => new Intl.DateTimeFormat('en-CA', { timeZone: TZ_NAME, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+const fmtTime = v => { const d = new Date(v); return Number.isFinite(d.getTime()) ? d.toLocaleString('zh-CN', { timeZone: TZ_NAME, hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : String(v || '—'); };
 function extLink(p, url, text) { const a = H(p, 'a', 'external-link', text); a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer'; return a; }
 function paperRef(p, ref) { if (ref?.url) return extLink(p, ref.url, ref.title); if (ref?.id?.startsWith('arxiv-')) return extLink(p, 'https://arxiv.org/abs/' + ref.id.slice(6), ref.title); return H(p, 'span', '', ref?.title || '—'); }
 function fileLink(parent, path, title) {
@@ -300,7 +302,7 @@ const T = {
   watched: { q: '', status: '全部' },
   lib: { q: '', sort: 'relevance', rating: '', watched: false, f: {}, open: {}, page: 0 },
   must: { tier: '全部', period: '全部' },
-  map: { sec: '发展史' },
+  map: { sec: '发展史', stream: null },
   res: { cat: null, full: false, abl: false, view: '效果' },
   hot: { platform: '全部' },
   research: { origin: 'all' }
@@ -329,6 +331,12 @@ R.home = async c => {
       const line = H(entry, 'div', 'rpd-brief-sources'); H(line, 'span', 'rpd-muted', '相关论文：'); item.sources.forEach((ref, i) => { paperRef(line, ref); if (i < item.sources.length - 1) H(line, 'span', 'rpd-muted', ' · '); });
     });
     if (b.weekly) { const w = H(daily, 'div', 'rpd-brief-weekly'); H(w, 'strong', '', '本周脉络'); H(w, 'p', 'rpd-sum', b.weekly.summary); H(w, 'span', 'rpd-muted', '来源：' + b.weekly.period.start + ' 至 ' + b.weekly.period.end + ' 周报'); }
+  }
+  if (b?.accepted?.length) {
+    const acc = H(c, 'section', 'rpd-overview-panel'); const ah0 = H(acc, 'div', 'rpd-panel-head'); H(ah0, 'h3', '', '新中稿'); H(ah0, 'span', 'rpd-progress-value', b.accepted.length + ' 篇');
+    H(acc, 'p', 'rpd-muted', '“中稿了”是论文库里的预印本查到了正式发表记录；“新入库”是每周按你的检索方向查到的新中稿论文，已直接进论文库。');
+    const list = b.accepted.length > 6 ? H(acc, 'details', 'rpd-home-more') : acc; if (list !== acc) H(list, 'summary', '', '展开全部');
+    b.accepted.forEach(a => { const row = H(list, 'div', 'rpd-row'); H(row, 'span', 'rpd-tag ' + (a.kind === 'new' ? 'accent' : 'good'), a.kind === 'new' ? '新入库' : '中稿了'); paperRef(H(row, 'span', 'rpd-row-t'), a.paper); H(row, 'span', 'rpd-muted', a.venue); });
   }
   if (b) {
     const picks = H(c, 'section', 'rpd-overview-panel'); const ph = H(picks, 'div', 'rpd-panel-head'); H(ph, 'h3', '', '今日精选'); H(ph, 'span', 'rpd-progress-value', b.pickedCount + ' 篇');
@@ -394,6 +402,7 @@ function recCard(el, p, redraw) {
   H(meta, 'span', '', '被引 ' + num(p.citations.count));
   if (p.codeUrl) extLink(meta, p.codeUrl, '代码'); if (p.hfUpvotes) H(meta, 'span', 'rpd-tag', '🤗 ' + p.hfUpvotes);
   if (p.picked) H(meta, 'span', 'rpd-tag good', '今日精选');
+  (p.sources || []).forEach(s => H(meta, 'span', 'rpd-tag soft', s));
   if (p.matchedKeywords.length) { const tags = H(el, 'div', 'rpd-tags'); p.matchedKeywords.forEach(k => H(tags, 'span', 'rpd-tag soft', k.label)); }
   const bar = H(el, 'div', 'rpd-bar');
   userControls(bar, p, redraw);
@@ -417,7 +426,11 @@ function mount(parent, draw, data, cls) { const holder = H(parent, 'article', cl
 R.issue = async c => {
   H(c, 'h2', 'rpd-issue-h', '论文推荐');
   H(c, 'p', 'rpd-muted', '按与你的研究兴趣的关系分三类，不设比例，找到多少就是多少。标“相关 / 不相关”会用来整理你的关键词树。');
+  const top = H(c, 'div', 'rpd-tools');
+  taskBtn(top, '立刻刷新今天的推荐', '', 'run-daily', () => startTask('run-daily', {}, '刷新今天的推荐'));
+  H(top, 'span', 'rpd-muted', '平时每天按“设置 → 每日推荐”里的时间自动运行；全文速读较慢，可能要几十分钟。');
   const index = await get('/recommendations');
+  if (index.error?.status === 404) return empty(c, '还没有任何一期推荐。点“立刻刷新今天的推荐”，或等到设置的时间自动运行。');
   const issues = shown(c, index, '推荐')?.issues;
   if (!issues) return;
   if (!issues.length) return empty(c, '还没有任何一期推荐。');
@@ -655,7 +668,14 @@ R.map = async c => {
   if (T.map.sec === '发展史') {
     H(c, 'p', 'rpd-lead', data.intro);
     data.stages.forEach(stage => { const block = H(c, 'div', 'rpd-stage'); const header = H(block, 'div', 'rpd-stage-h'); H(header, 'span', 'rpd-year', stage.period); H(header, 'h3', '', stage.title); H(block, 'p', 'rpd-muted', stage.description); stage.milestones.forEach(m => { const row = H(block, 'div', 'rpd-miles'); H(row, 'span', 'rpd-mile-d', m.date + (m.venue ? ' ' + m.venue : '')); const t = H(row, 'span'); paperRef(t, m.paper); H(t, 'span', '', '：' + m.text); }); });
-  } else if (T.map.sec === '热点演变') hotspotTimeline(c, data.hotspots);
+  } else if (T.map.sec === '热点演变') {
+    const hots = Array.isArray(data.hotspots) ? data.hotspots : data.hotspots ? [{ stream: 'main', name: 'arXiv', ...data.hotspots }] : [];
+    if (hots.length > 1) {
+      if (!hots.some(h => h.stream === T.map.stream)) T.map.stream = hots[0].stream;
+      const bar = H(c, 'div', 'rpd-tools'); hots.forEach(h => chip(bar, h.name, T.map.stream === h.stream, () => { T.map.stream = h.stream; render(); }));
+    }
+    hotspotTimeline(c, hots.find(h => h.stream === T.map.stream) || hots[0]);
+  }
   else if (T.map.sec === '热点变化') table(c, ['论文库方向', '趋势', '变化', '论文数', '说明'], data.trends.map(t => [t.direction, { up: '上升', down: '下降', flat: '持平' }[t.trend], (t.changePct > 0 ? '+' : '') + t.changePct + '%', '近 ' + t.windowDays + ' 天 ' + t.paperCount + ' 篇', t.note]));
   else if (T.map.sec === '评测与基线') table(c, ['名称', '类型', '使用', '说明'], data.benchmarksAndBaselines.map(b => [b.name, b.kind === 'benchmark' ? '评测集' : '基线', '被 ' + b.usedByCount + ' 篇使用', b.note]));
   else if (T.map.sec === '空白与其它发现') table(c, ['问题', '类型', '证据', '说明', '出处'], data.gaps.map(g => [g.title, g.kind === 'gap' ? '空白' : '发现', g.metric, g.note, td => g.sources.forEach((s, i) => { if (i) H(td, 'span', '', '、'); paperRef(td, s); })]));
@@ -664,7 +684,7 @@ R.map = async c => {
 
 // 全领域热点演变：每个热点一行，按起势时间排；小图是它每月占 arXiv 论文流的比例（三个月平均）。
 const hotspotTimeline = (c, hot) => {
-  if (!hot || !hot.items.length) return empty(c, '还没有全领域论文数据：后端运行 pwb feed 取 arXiv 论文后，再点“重新整理”。');
+  if (!hot || !hot.items.length) return empty(c, '还没有全领域论文数据：在后端的 profile.json 里配置 streams，运行 pwb feed 取 arXiv 论文后，再点“重新整理”。');
   const months = hot.months;
   H(c, 'p', 'rpd-muted', '数据：' + hot.source + '，' + months[0] + ' 到 ' + months[months.length - 1] + ' 共 ' + hot.totals.reduce((a, b) => a + b, 0) + ' 篇。按起势时间（三个月平均占比从早期基线涨到峰值的四分之一）排序；词组是从数据里找出来的，大模型只负责归类。右边的小图是 ' + months[0] + ' 到 ' + months[months.length - 1] + ' 每月占比，各自按自己的峰值缩放，鼠标停在上面看每月篇数。');
   const share = h => h.counts.map((n, i) => hot.totals[i] ? n / hot.totals[i] : 0).map((x, i, a) => { const w = a.slice(Math.max(0, i - 2), i + 1); return w.reduce((p, q) => p + q, 0) / w.length; });
@@ -931,6 +951,63 @@ R.research = async c => {
   });
 };
 
+// 每日推荐设置：改一项存一项（只提交改了的那部分，后端合并）。研究方向的文字（论文流的检索词等）在后端的 data/profile.json。
+async function recommendSettings(c) {
+  const box = sec(c, '每日推荐', '流程怎么跑；检索词、方向说明在后端的 data/profile.json 里改');
+  const res = await get('/settings/recommend');
+  if (!shown(box, res, '每日推荐设置')) return;
+  const s = res.data;
+  const put = async (patch, ok) => { const r = await act(() => http('PUT', '/settings/recommend', { body: patch }), ok || '已保存'); if (r) Object.assign(s, r); return !!r; };
+  const group = title => { const g = H(box, 'div', 'rpd-set-group'); H(g, 'h4', '', title); return g; };
+  const check = (g, label, value, patch) => { const lab = H(H(g, 'div', 'rpd-set-row'), 'label', 'rpd-check'); const cb = H(lab, 'input'); cb.type = 'checkbox'; cb.checked = value; H(lab, 'span', '', label);
+    cb.addEventListener('change', async () => { if (!(await put(patch(cb.checked)))) cb.checked = !cb.checked; }); };
+  const number = (g, label, value, min, max, patch, step) => { const f = H(g, 'label', 'rpd-field rpd-field-inline'); H(f, 'span', '', label); const i = H(f, 'input', 'rpd-input rpd-input-num');
+    i.type = 'number'; i.min = min; i.max = max; i.step = step || 1; i.value = value; let saved = value;
+    i.addEventListener('change', async () => { const v = Number(i.value); if (!Number.isFinite(v) || v < min || v > max) { toast(label + '要在 ' + min + '–' + max + ' 之间'); i.value = saved; return; }
+      if (await put(patch(v))) saved = v; else i.value = saved; }); };
+  const multi = (g, label, options, value, patch) => { const row = H(g, 'div', 'rpd-field rpd-field-inline'); H(row, 'span', '', label); const cur = new Set(value);
+    options.forEach(([k, name]) => { const lab = H(row, 'label', 'rpd-check'); const cb = H(lab, 'input'); cb.type = 'checkbox'; cb.checked = cur.has(k); H(lab, 'span', '', name);
+      cb.addEventListener('change', async () => { cb.checked ? cur.add(k) : cur.delete(k); if (!(await put(patch(options.map(o => o[0]).filter(x => cur.has(x)))))) { cb.checked = !cb.checked; cb.checked ? cur.add(k) : cur.delete(k); } }); }); };
+  const CATS = [['core', '核心'], ['adjacent', '邻近'], ['trending', '热点']];
+
+  let g = group('运行');
+  check(g, '每天定时运行', s.schedule.enabled, v => ({ schedule: { enabled: v } }));
+  const tf = H(g, 'label', 'rpd-field rpd-field-inline'); H(tf, 'span', '', '运行时间（' + (TZ_NAME || '后端所在时区') + '）'); const time = H(tf, 'input', 'rpd-input rpd-input-num'); time.type = 'time'; time.value = s.schedule.time;
+  time.addEventListener('change', async () => { if (!(await put({ schedule: { time: time.value } }))) time.value = s.schedule.time; });
+  number(g, '错过后最多补几天', s.schedule.maxCatchupDays, 1, 30, v => ({ schedule: { maxCatchupDays: v } }));
+  const wf = H(g, 'label', 'rpd-field rpd-field-inline'); H(wf, 'span', '', '每周任务在'); const wd = H(wf, 'select', 'rpd-select');
+  ['周一', '周二', '周三', '周四', '周五', '周六', '周日'].forEach((n, i) => { const o = H(wd, 'option', '', n); o.value = String(i + 1); }); wd.value = String(s.schedule.weeklyDay);
+  wd.addEventListener('change', () => put({ schedule: { weeklyDay: Number(wd.value) } }));
+  H(g, 'p', 'rpd-muted', '后端要一直开着才会定时运行；错过了（比如电脑在睡眠）会在醒来后补跑。开机自启：在后端运行 python -m pwb service install。');
+
+  g = group('来源');
+  if (s.profileProblem) H(g, 'p', 'rpd-warn', s.profileProblem);
+  s.streams.forEach(st => check(g, 'arXiv · ' + st.name + '（' + st.query + '）', s.sources.streams[st.key] !== false, v => ({ sources: { streams: { [st.key]: v } } })));
+  check(g, 'Hugging Face 每日论文（每天的全部论文都参与初筛）', s.sources.huggingface, v => ({ sources: { huggingface: v } }));
+
+  g = group('初筛与分类');
+  number(g, '每批给大模型几篇', s.screen.batchSize, 5, 100, v => ({ screen: { batchSize: v } }));
+  number(g, '取几篇“不相关”当反例', s.screen.negativeExamples, 0, 200, v => ({ screen: { negativeExamples: v } }));
+  multi(g, '邻近的种子论文', [['own', '本人论文'], ['watched', '关注论文'], ['relevant', '标为相关'], ['library', '论文库核心论文']], s.adjacent.seeds, v => ({ adjacent: { seeds: v } }));
+  number(g, '邻近回看几天', s.adjacent.lookbackDays, 1, 30, v => ({ adjacent: { lookbackDays: v } }));
+  number(g, 'Hugging Face 点赞达到多少算热点', s.trending.minHfUpvotes, 0, 10000, v => ({ trending: { minHfUpvotes: v } }));
+  check(g, '命中正在上涨的热点（领域发展史 → 热点演变）也算热点', s.trending.useHotspots, v => ({ trending: { useHotspots: v } }));
+  number(g, '命中正在上涨热点的，点赞达到多少算热点', s.trending.hotspotMinHfUpvotes, 0, 10000, v => ({ trending: { hotspotMinHfUpvotes: v } }));
+  number(g, '热点每天最多几篇（按点赞取）', s.trending.maxPerDay, 0, 500, v => ({ trending: { maxPerDay: v } }));
+
+  g = group('速读与精选');
+  multi(g, '读全文的类别', CATS, s.skim.fullText, v => ({ skim: { fullText: v } }));
+  number(g, '每天全文速读最多几篇（其余只看摘要）', s.skim.maxFullTextPerDay, 0, 500, v => ({ skim: { maxFullTextPerDay: v } }));
+  number(g, '每天精选几篇', s.pick.max, 0, 30, v => ({ pick: { max: v } }));
+  [['relevance', '相关程度'], ['quality', '质量分'], ['hf', '点赞'], ['code', '有代码']].forEach(([k, n]) => number(g, '打分权重 · ' + n, s.pick.weights[k], 0, 1, v => ({ pick: { weights: { [k]: v } } }), 0.05));
+  multi(g, '直接进论文库的类别（不勾就要你标“相关”才进）', CATS, s.library.autoAdd, v => ({ library: { autoAdd: v } }));
+
+  g = group('每周');
+  check(g, '新中稿入库（按领域检索的检索词和会议清单查新中稿，筛选通过的直接入库）', s.weekly.newAccepted, v => ({ weekly: { newAccepted: v } }));
+  check(g, '更新领域发展史和热点演变', s.weekly.map, v => ({ weekly: { map: v } }));
+  check(g, '更新经典与必读（要重新取参考文献，较慢）', s.weekly.classics, v => ({ weekly: { classics: v } }));
+}
+
 R.set = async c => {
   const conn = sec(c, '后端连接', '保存在 ' + CONFIG_FILE);
   if (configError) H(conn, 'p', 'rpd-warn', configError);
@@ -946,9 +1023,10 @@ R.set = async c => {
   const prefs = sec(c, '推荐偏好');
   const p = await get('/me/preferences');
   if (shown(prefs, p, '推荐偏好')) {
-    const lab = H(prefs, 'label', 'rpd-check'); const cb = H(lab, 'input'); cb.type = 'checkbox'; cb.checked = p.data.needCode; H(lab, 'span', '', '只推荐有开源代码的论文'); H(prefs, 'span', 'rpd-muted', '（每日推荐流水线上线后生效）');
+    const lab = H(prefs, 'label', 'rpd-check'); const cb = H(lab, 'input'); cb.type = 'checkbox'; cb.checked = p.data.needCode; H(lab, 'span', '', '只推荐有开源代码的论文');
     cb.addEventListener('change', async () => { const r = await act(() => http('PUT', '/me/preferences', { body: { needCode: cb.checked } }), '已保存推荐偏好'); if (!r) cb.checked = !cb.checked; });
   }
+  await recommendSettings(c);
   const engineSec = sec(c, '大模型引擎', '后端整理关键词等工作时调用的模型，可随时切换');
   const llmRes = await get('/settings/llm');
   const save = async (fn, ok) => { if (await act(fn, ok)) render(); };
@@ -968,7 +1046,7 @@ R.set = async c => {
   }
   const [pipeline, tasks, jobs] = await Promise.all([get('/pipeline'), get('/tasks?limit=15'), get('/jobs')]);
   jobsPanel(c, jobs);
-  const manual = sec(c, '说明书：系统每天自己在做什么', '北京时间');
+  const manual = sec(c, '说明书：系统每天自己在做什么', '时间按 ' + (TZ_NAME || '本机时区'));
   if (shown(manual, pipeline, '系统日程')) table(manual, ['时间', '发生什么', '在面板哪里看'], pipeline.data.schedule.map(s => [s.when, s.what, s.panel || '—']));
   const recent = sec(c, '最近的后台任务');
   if (shown(recent, tasks, '任务列表')) {
@@ -1002,7 +1080,7 @@ async function render() {
   loading?.remove(); content.empty(); content.appendChild(next); updateStatus();
 }
 await Promise.all([loadNotes(), loadExperiments()]);
-try { TASK_TYPES = (await http('GET', '/health')).taskTypes || null; } catch (e) {}
+try { const h = await http('GET', '/health'); TASK_TYPES = h.taskTypes || null; TZ_NAME = h.timezone || undefined; } catch (e) {}
 render();
 resolveNoteIds();
 

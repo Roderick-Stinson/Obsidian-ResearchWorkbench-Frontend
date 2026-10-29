@@ -257,3 +257,11 @@
 .rpd-root .rpd-spark{grid-column:2;grid-row:1 / span 4;width:240px;height:36px;color:var(--interactive-accent);align-self:center;}
 .rpd-root .rpd-hot .rpd-sum{margin:4px 0;}
 @media (max-width:640px){.rpd-root .rpd-hot{grid-template-columns:1fr;}.rpd-root .rpd-spark{grid-column:1;grid-row:auto;width:100%;}}
+
+/* 设置 → 每日推荐 */
+.rpd-root .rpd-set-group { border-top: 1px solid var(--background-modifier-border); padding: 10px 0 4px; }
+.rpd-root .rpd-set-group h4 { margin: 0 0 6px; font-size: var(--font-ui-small); color: var(--text-muted); font-weight: 600; }
+.rpd-root .rpd-field-inline { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 4px 0; }
+.rpd-root .rpd-field-inline > span:first-child { min-width: 12em; }
+.rpd-root .rpd-input-num { width: 7em; }
+.rpd-root .rpd-set-row { margin: 4px 0; }

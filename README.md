@@ -1,6 +1,6 @@
 # 论文工作台 · Obsidian 面板
 
-> An Obsidian (Dataview) dashboard for a local research-paper workbench: paper library, your marks and reading queue, interest keyword tree, classics and must-reads, field history and hotspot trends. All data comes from the backend at [Obsidian-ResearchWorkbench-Backend](https://github.com/Roderick-Stinson/Obsidian-ResearchWorkbench-Backend). Docs are in Chinese.
+> An Obsidian (Dataview) dashboard for a local research-paper workbench: daily paper recommendations (arXiv + Hugging Face Daily Papers) with briefs, paper library, your marks and reading queue, interest keyword tree, classics and must-reads, field history and per-stream hotspot trends. All data comes from the backend at [Obsidian-ResearchWorkbench-Backend](https://github.com/Roderick-Stinson/Obsidian-ResearchWorkbench-Backend). Docs are in Chinese.
 
 面板只负责展示，数据都来自本机的后端服务（[Obsidian-ResearchWorkbench-Backend](https://github.com/Roderick-Stinson/Obsidian-ResearchWorkbench-Backend)）。论文和 PDF 都存在后端；vault 里只保存阅读笔记、实验记录和面板配置。
 
@@ -18,6 +18,12 @@
 5. 后端地址默认是 `http://127.0.0.1:8765/api/v1`。要改地址或设置 token，在面板“设置 → 后端连接”里改，会保存到 `面板组件/config.json`（这个文件不要提交，里面可能有 token）。
 
 后端没启动时，面板显示上次成功同步的数据（缓存在 Obsidian 本地，不写进 vault），并提示“后端未连接”。改了 `view.js` 或 `view.css` 之后，用命令面板运行 `Dataview: Rebuild current view`。
+
+## 每日推荐
+
+- “论文推荐”页按天显示核心 / 邻近 / 热点三类，“立刻刷新今天的推荐”马上跑一次；首页是当天的简报、精选和新中稿。
+- “设置 → 每日推荐”里改运行时间、来源开关（每个 arXiv 论文流、Hugging Face）、阈值、速读范围、精选篇数和打分权重；检索词等研究方向的文字在后端的 `data/profile.json`。
+- 推荐卡片上标“相关”的论文才进论文库；标“不相关”的会成为以后初筛的反例。
 
 ## 面板会读写 vault 里的哪些地方
 
