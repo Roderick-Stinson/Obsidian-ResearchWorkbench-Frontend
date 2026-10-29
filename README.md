@@ -1,8 +1,8 @@
 # 论文工作台 · Obsidian 面板
 
-> An Obsidian (Dataview) dashboard for a local research-paper workbench: paper library, your marks and reading queue, interest keyword tree, classics and must-reads, field history and hotspot trends. All data comes from the backend at [paper-workbench](https://github.com/Roderick-Stinson/paper-workbench). Docs are in Chinese.
+> An Obsidian (Dataview) dashboard for a local research-paper workbench: paper library, your marks and reading queue, interest keyword tree, classics and must-reads, field history and hotspot trends. All data comes from the backend at [Obsidian-ResearchWorkbench-Backend](https://github.com/Roderick-Stinson/Obsidian-ResearchWorkbench-Backend). Docs are in Chinese.
 
-面板只负责展示，数据都来自本机的后端服务（[paper-workbench](https://github.com/Roderick-Stinson/paper-workbench)）。论文和 PDF 都存在后端；vault 里只保存阅读笔记、实验记录和面板配置。
+面板只负责展示，数据都来自本机的后端服务（[Obsidian-ResearchWorkbench-Backend](https://github.com/Roderick-Stinson/Obsidian-ResearchWorkbench-Backend)）。论文和 PDF 都存在后端；vault 里只保存阅读笔记、实验记录和面板配置。
 
 ## 安装
 
