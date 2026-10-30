@@ -265,3 +265,12 @@
 .rpd-root .rpd-field-inline > span:first-child { min-width: 12em; }
 .rpd-root .rpd-input-num { width: 7em; }
 .rpd-root .rpd-set-row { margin: 4px 0; }
+
+/* 作者机构与团队 */
+.rpd-root .rpd-inst{color:var(--text-normal);}
+.rpd-root .rpd-authors{margin-top:8px;padding:8px 12px;border:1px solid var(--background-modifier-border);border-radius:8px;}
+.rpd-root .rpd-authors .rpd-row{justify-content:flex-start;padding:6px 0;}
+.rpd-root .rpd-authors .rpd-row .rpd-muted{flex:1;}
+.rpd-root .rpd-team-people{margin:6px 0 8px;}
+.rpd-root .rpd-team-people .rpd-row{justify-content:flex-start;padding:5px 0;}
+.rpd-root .rpd-team-people .rpd-row .rpd-muted{flex:1;}

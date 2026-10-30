@@ -397,6 +397,7 @@ let tab = input?.page === 'research' ? 'research' : 'home';
 const T = {
   issue: { date: null, q: '' },
   watched: { q: '', status: '全部' },
+  teams: { q: '' },
   lib: { q: '', sort: 'relevance', rating: '', watched: false, f: {}, open: {}, page: 0 },
   must: { tier: '全部', period: '全部' },
   map: { sec: '发展史', stream: null },
@@ -496,6 +497,7 @@ function recCard(el, p, redraw) {
   const why = H(el, 'p', 'rpd-reason'); H(why, 'span', 'rpd-tag accent', CATEGORY[p.category][0]); H(why, 'span', '', ' ' + p.reason);
   const meta = H(el, 'div', 'rpd-meta');
   extLink(meta, p.url, p.id); H(meta, 'span', '', p.publishedAt);
+  if (p.institutions?.length) H(meta, 'span', 'rpd-inst', p.institutions.join(' · '));
   H(meta, 'span', '', '被引 ' + num(p.citations.count));
   if (p.codeUrl) extLink(meta, p.codeUrl, '代码'); if (p.hfUpvotes) H(meta, 'span', 'rpd-tag', '🤗 ' + p.hfUpvotes);
   if (p.picked) H(meta, 'span', 'rpd-tag good', '今日精选');
@@ -517,6 +519,79 @@ function deepReadButtons(bar, el, p) {
   });
   taskBtn(bar, '生成精读', 'rpd-ghost', 'deep-read', () => startTask('deep-read', { paperId: p.id }, '精读 ' + p.id));
 }
+// ---------- 作者机构与关注的人（约定 5.19） ----------
+let followKeys = null;
+async function loadFollows(force) {
+  if (followKeys && !force) return followKeys;
+  try { followKeys = new Set((await http('GET', '/me/follows')).people.map(p => p.key)); } catch (e) { followKeys = followKeys || new Set(); }
+  return followKeys;
+}
+// 关注 / 取消关注一个人；institution 是机构 key（团队页用上级机构，论文作者用他自己的机构）。
+async function toggleFollow(person, institution) {
+  const on = followKeys?.has(person.key);
+  const r = await act(() => on ? http('DELETE', '/me/follows/' + enc(person.key))
+    : http('PUT', '/me/follows/' + enc(person.key), { body: { name: person.name, openalexId: /^A\d+$/.test(person.key) ? person.key : null, institution: institution || null } }),
+    on ? '已取消关注' : '已关注 ' + person.name + '，他的新论文会进每日推荐');
+  if (r) followKeys = new Set(r.people.map(p => p.key));
+  return !!r;
+}
+// 论文卡片下展开每位作者的机构（✉ 是通讯作者），可以直接关注某位作者。
+async function authorsBox(el, id) {
+  const old = el.querySelector('.rpd-authors'); if (old) { old.remove(); return; }
+  const box = H(el, 'div', 'rpd-authors'); H(box, 'p', 'rpd-muted', '加载中…');
+  let p; try { [p] = await Promise.all([http('GET', '/papers/' + enc(id)), loadFollows()]); } catch (e) { box.empty(); H(box, 'p', 'rpd-muted', errorText(e)); return; }
+  box.empty();
+  if (!p.authorsDetail) { H(box, 'p', 'rpd-muted', '还没整理这篇的作者机构（每天推荐时会补；也可以在“团队”页点“整理作者机构”）。作者：' + (p.authors.join('、') || '—')); return; }
+  const src = p.affiliations?.sources || [];
+  H(box, 'p', 'rpd-muted', '来源：' + (src.map(x => ({ openalex: 'OpenAlex', pdf: 'PDF 第一页' }[x])).join(' + ') || '没查到') + (src.includes('pdf') ? '' : '（没读 PDF，不知道通讯作者）'));
+  p.authorsDetail.forEach(a => {
+    const row = H(box, 'div', 'rpd-row');
+    H(row, 'strong', '', a.name + (a.corresponding ? ' ✉' : ''));
+    H(row, 'span', 'rpd-muted', a.affiliations.map(f => [f.parent, f.nameZh || f.name, f.unit].filter(Boolean).join(' · ')).join('；') || '机构不明');
+    const draw = () => { const b = row.querySelector('.rpd-follow'); if (b) b.remove(); const c = chip(row, followKeys.has(a.personKey) ? '已关注' : '关注', followKeys.has(a.personKey), async () => { if (await toggleFollow({ key: a.personKey, name: a.name }, a.affiliations[0]?.key)) draw(); }); c.addClass('rpd-follow'); };
+    draw();
+  });
+}
+
+// 团队：按机构聚合论文库，看哪些团队在做和你一样的方向，挑要关注的人。
+R.teams = async c => {
+  const t = T.teams;
+  H(c, 'h2', 'rpd-issue-h', '团队');
+  H(c, 'p', 'rpd-muted', '按作者机构聚合论文库里的论文：越和你的方向相关的论文权重越高，排在前面的机构就是和你做同样内容的团队。每个机构里按当通讯作者 / 末位作者的次数列出人，点“关注”后他们的新论文会进每日推荐。');
+  const bar = H(c, 'div', 'rpd-tools');
+  const search = H(bar, 'input', 'rpd-search'); search.type = 'search'; search.placeholder = '搜机构、人名、院系 / 实验室'; search.value = t.q;
+  search.addEventListener('change', () => { t.q = search.value.trim(); render(); });
+  taskBtn(bar, '整理作者机构', '', 'rebuild-affiliations', () => startTask('rebuild-affiliations', {}, '整理作者机构（OpenAlex + 读 PDF 第一页，全库要一阵子）'));
+  const [res, fol] = await Promise.all([get('/teams?limit=80' + (t.q ? '&q=' + enc(t.q) : '')), get('/me/follows')]);
+  if (fol.data) followKeys = new Set(fol.data.people.map(p => p.key));
+  const fs = sec(c, '关注的人', (fol.data?.people.length || 0) + ' 位 · 他们的新论文会进每日推荐（邻近类）');
+  if (fol.data && !fol.data.people.length) empty(fs, '还没关注任何人。在下面的机构里，或论文卡片的“作者与机构”里点“关注”。');
+  (fol.data?.people || []).forEach(p => { const row = H(fs, 'div', 'rpd-row'); H(row, 'strong', '', p.name); H(row, 'span', 'rpd-muted', p.institutionName || '');
+    btn(row, '取消关注', 'rpd-ghost', async () => { if (await toggleFollow(p)) render(); }); });
+  const data = shown(c, res, '团队');
+  if (!data) return;
+  const cov = data.coverage;
+  H(c, 'p', 'rpd-muted', '论文库 ' + cov.papers + ' 篇里 ' + cov.withAffiliations + ' 篇有机构信息' + (cov.withAffiliations < cov.papers ? '；其余的每天推荐时补一些，想一次补完点“整理作者机构”。' : '。') + ' 共 ' + data.total + ' 个机构。');
+  if (!data.items.length) empty(c, t.q ? '没有符合的机构。' : '还没有机构信息。点“整理作者机构”。');
+  const cards = H(c, 'div', 'rpd-cards');
+  data.items.forEach(g => mount(cards, (el, g, redraw) => {
+    const head = H(el, 'div', 'rpd-card-head'); H(head, 'h3', 'rpd-card-title', g.nameZh || g.name);
+    H(head, 'span', 'rpd-quality', g.paperCount + ' 篇');
+    if (g.nameZh && g.nameZh !== g.name) H(el, 'div', 'rpd-en', g.name);
+    const meta = H(el, 'div', 'rpd-meta'); if (g.country) H(meta, 'span', '', g.country); if (g.latestYear) H(meta, 'span', '', '最近 ' + g.latestYear);
+    g.units.forEach(u => H(meta, 'span', 'rpd-tag soft', u));
+    if (g.keywords.length) { const tags = H(el, 'div', 'rpd-tags'); g.keywords.forEach(k => H(tags, 'span', 'rpd-tag topic', k.label + ' ' + k.count)); }
+    const people = H(el, 'div', 'rpd-team-people');
+    g.people.forEach(p => {
+      const row = H(people, 'div', 'rpd-row'); H(row, 'strong', '', p.name);
+      H(row, 'span', 'rpd-muted', p.paperCount + ' 篇' + (p.correspondingCount ? ' · 通讯作者 ' + p.correspondingCount : '') + (p.lastAuthorCount ? ' · 末位 ' + p.lastAuthorCount : ''));
+      chip(row, p.followed ? '已关注' : '关注', p.followed, async () => { if (await toggleFollow(p, g.key)) { p.followed = !p.followed; redraw(); } });
+    });
+    const line = H(el, 'div', 'rpd-brief-sources'); H(line, 'span', 'rpd-muted', '论文：');
+    g.papers.forEach((ref, i) => { if (i) H(line, 'span', 'rpd-muted', ' · '); paperRef(line, ref); });
+  }, g));
+};
+
 // 卡片自带重画函数：改了评分、标记后只重画这一张，不重新拉整页数据。
 function mount(parent, draw, data, cls) { const holder = H(parent, 'article', cls || 'rpd-card'); const redraw = () => { holder.empty(); draw(holder, data, redraw); }; redraw(); return holder; }
 
@@ -636,6 +711,8 @@ function libCard(el, p, redraw) {
   const src = p.urls?.source || sourceUrl(p.id);
   if (src) extLink(meta, src, sourceLabel(p));
   if (p.firstAuthor) H(meta, 'span', '', p.firstAuthor + (p.year ? ' · ' + p.year : ''));
+  if (p.institutions?.length) H(meta, 'span', 'rpd-inst', p.institutions.join(' · '));
+  btn(meta, '作者与机构', 'rpd-link', () => authorsBox(el, p.id));
   if (p.citations?.count != null) H(meta, 'span', '', '被引 ' + p.citations.count);
   if (p.hasPdf) btn(meta, 'PDF', 'rpd-link', () => openPdf(p.id)); else if (p.urls?.pdf) extLink(meta, p.urls.pdf, 'PDF');
   if (p.urls?.code) extLink(meta, p.urls.code, '代码');
@@ -1124,6 +1201,12 @@ async function recommendSettings(c) {
   [['relevance', '相关程度'], ['quality', '质量分'], ['hf', '点赞'], ['code', '有代码']].forEach(([k, n]) => number(g, '打分权重 · ' + n, s.pick.weights[k], 0, 1, v => ({ pick: { weights: { [k]: v } } }), 0.05));
   multi(g, '直接进论文库的类别（不勾就要你标“相关”才进）', CATS, s.library.autoAdd, v => ({ library: { autoAdd: v } }));
 
+  g = group('作者机构与关注的人');
+  check(g, '每天给新进论文库的论文补作者机构（OpenAlex）', s.authors.daily, v => ({ authors: { daily: v } }));
+  check(g, '同时读 PDF 第一页，认出通讯作者、补上 OpenAlex 没有的机构（用大模型）', s.authors.readPdf, v => ({ authors: { readPdf: v } }));
+  number(g, '每天最多补几篇（全库一次补完用“团队”页的“整理作者机构”）', s.authors.maxPerDay, 0, 1000, v => ({ authors: { maxPerDay: v } }));
+  check(g, '关注的人的新论文进每日推荐（邻近类）', s.authors.followRecommend, v => ({ authors: { followRecommend: v } }));
+
   g = group('阅读笔记');
   H(g, 'p', 'rpd-muted', '面板把阅读笔记按小节同步给后端；下面三个小节名要和模板（' + (CFG.noteTemplate || DEFAULT_CONFIG.noteTemplate) + '）里的标题一致，改了模板标题就改这里。');
   check(g, '整理笔记里的要点，初筛时参考（回应了你关心的问题，没命中关键词也算核心；用了你存疑的思路，精选分打折）', s.notes.screening, v => ({ notes: { screening: v } }));
@@ -1205,7 +1288,7 @@ function updateStatus() {
   pill.toggleClass('on', online === true); pill.toggleClass('off', online !== true); pillHint.setText(CFG.apiBase);
 }
 const nav = H(root, 'nav', 'rpd-nav');
-const NAV = [['home', '首页'], ['experiments', '实验记录'], ['issue', '论文推荐'], ['watched', '关注论文'], ['lib', '论文库'], ['must', '经典与必读'], ['map', '领域发展史'], ['hot', '热点'], ['res', '结果表'], ['idea', 'IDEA'], ['research', '我的研究领域'], ['rep', '报告'], ['inbox', '待认领'], ['set', '设置']];
+const NAV = [['home', '首页'], ['experiments', '实验记录'], ['issue', '论文推荐'], ['watched', '关注论文'], ['teams', '团队'], ['lib', '论文库'], ['must', '经典与必读'], ['map', '领域发展史'], ['hot', '热点'], ['res', '结果表'], ['idea', 'IDEA'], ['research', '我的研究领域'], ['rep', '报告'], ['inbox', '待认领'], ['set', '设置']];
 const content = H(root, 'main', 'rpd-content');
 toastEl = document.body.createDiv({ cls: 'rpd-toast' });
 function goTab(next) { tab = next; render(); }
