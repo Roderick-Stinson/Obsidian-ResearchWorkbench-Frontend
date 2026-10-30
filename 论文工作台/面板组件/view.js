@@ -198,7 +198,9 @@ const NOTE_DIR = '论文阅读/论文笔记整理/';
 let notes = [];
 async function loadNotes() {
   const src = dv.pages().where(p => p.file.ext === 'md' && !p.file.path.startsWith('Templates/') && !p.file.path.startsWith('论文工作台/模板/') &&(p.file.path.startsWith(NOTE_DIR) || p.file.tags.includes('#paper'))).array();
-  notes = src.map(p => ({ path: p.file.path, name: p.file.name.replace(/- /g, ': '), status: String(p.status || '未分类'), paperId: p.paper_id ? String(p.paper_id) : '', mtime: p.file.mtime?.toMillis?.() || 0 }));
+  notes = src.map(p => ({ path: p.file.path, file: p.file.name, name: p.file.name.replace(/- /g, ': '), status: String(p.status || '未分类'), paperId: p.paper_id ? String(p.paper_id) : '',
+    rating: Number.isInteger(Number(p.rating)) && Number(p.rating) >= 0 && Number(p.rating) <= 5 && p.rating !== '' && p.rating != null ? Number(p.rating) : null,
+    sync: p.sync !== false && String(p.sync).toLowerCase() !== 'false', mtime: p.file.mtime?.toMillis?.() || 0 }));
   notes.sort((a, b) => b.mtime - a.mtime);
 }
 const noteFor = id => notes.find(n => n.paperId === id);
@@ -209,10 +211,74 @@ async function setFM(path, key, val) {
 }
 // 论文中稿换了 ID 时，把笔记里的 paper_id 改成新 ID（约定 3.3）。
 async function resolveNoteIds() {
-  const ids = [...new Set(notes.map(n => n.paperId).filter(Boolean))];
+  // 只送论文 ID；写成链接的由同步笔记时后端换成 ID（一个不合格的 ID 会让整次请求 400）
+  const ids = [...new Set(notes.map(n => n.paperId).filter(id => /^[a-z][a-z0-9]*-[A-Za-z0-9._-]+$/.test(id)))];
   if (!ids.length) return;
   let res; try { res = await http('POST', '/papers/resolve', { body: { ids: ids.slice(0, 500) } }); } catch (e) { return; }
   for (const n of notes) { const next = res.ids[n.paperId]; if (next && next !== n.paperId) { try { await setFM(n.path, 'paper_id', next); n.paperId = next; } catch (e) {} } }
+}
+// ---------- 阅读笔记同步给后端（约定 5.18）：后端不读 vault，由面板读出来、按小节发过去，推荐时参考 ----------
+const OWN_DIR = '我的论文/';  // 你对自己工作的思考，永远不发
+// 去掉 frontmatter、%% 注释、模板里没填的占位行（“- 优点：”、空列表项、空公式、空提示框、和模板一字不差的行）和没填的表格，
+// 按标题切开；空的小节不要。template 是模板里的行（Set），没有模板时为空。
+function noteSections(text, template = new Set()) {
+  const body = text.replace(/^---\r?\n[\s\S]*?\r?\n---[^\n]*\n?/, '').replace(/%%[\s\S]*?%%/g, '');
+  const out = []; let cur = { heading: '', level: 0, lines: [] }, fence = false;
+  for (const line of body.split(/\r?\n/)) {
+    if (/^\s*(```|~~~)/.test(line)) fence = !fence;
+    const m = !fence && line.match(/^(#{1,6})\s+(.+?)\s*#*\s*$/);
+    if (m) { cur = { heading: m[2].trim(), level: m[1].length, lines: [] }; out.push(cur); } else cur.lines.push(line);
+  }
+  return out.map(sec => ({ heading: sec.heading.slice(0, 200), level: sec.level, text: cleanSection(sec.lines, template) })).filter(sec => sec.text).slice(0, 200);
+}
+function cleanSection(lines, template) {
+  const kept = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^\s*\|/.test(line)) {  // 一张表：没有哪一行数据填了两格以上就整张不要
+      const table = []; while (i < lines.length && /^\s*\|/.test(lines[i])) table.push(lines[i++]); i--;
+      const cells = r => r.trim().replace(/^\||\|$/g, '').split('|').map(x => x.trim());
+      if (table.slice(2).some(r => cells(r).filter(Boolean).length >= 2)) kept.push(...table);
+      continue;
+    }
+    if (/^\s*\$\$\s*$/.test(line)) {  // 公式块：里面没写东西就整块不要
+      let j = i + 1; while (j < lines.length && !/^\s*\$\$\s*$/.test(lines[j])) j++;
+      if (lines.slice(i + 1, j).every(l => !l.trim())) { i = j; continue; }
+    }
+    if (/^\s*([-*+]|\d+[.)])\s*$/.test(line) || /^\s*[-*+]\s*(\*\*)?[^：:*]{0,30}(\*\*)?[：:]\s*$/.test(line) || /^\s*>\s*$/.test(line)) continue;
+    const callout = /^\s*>\s*\[![^\]]+\]/.test(line);
+    if (callout && !/^\s*>\s*\S/.test(lines[i + 1] || '')) continue;  // 正文没写的提示框
+    if (!callout && template.has(line.trim())) continue;
+    kept.push(line);
+  }
+  return kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+let notesSync = null;
+// 先比对后端存的每篇笔记的路径和修改时间，有变化才把全部笔记发过去（后端整体替换）。force 时不比对。
+function syncNotes(force) {
+  if (notesSync) return notesSync;
+  notesSync = (async () => {
+    try {
+      const local = notes.filter(n => n.paperId && n.sync && !n.path.startsWith(OWN_DIR));
+      const remote = await http('GET', '/me/notes');
+      const sig = list => list.map(n => n.path + '\u0000' + n.mtime).sort().join('\n');
+      if (!force && sig(local) === sig([...remote.items, ...remote.skipped])) return remote;
+      const tf = app.vault.getAbstractFileByPath(CFG.noteTemplate || DEFAULT_CONFIG.noteTemplate);
+      const template = new Set(tf ? (await app.vault.cachedRead(tf)).replace(/%%[\s\S]*?%%/g, '').split(/\r?\n/).map(l => l.trim()).filter(Boolean) : []);
+      const payload = [];
+      for (const n of local) {
+        const f = app.vault.getAbstractFileByPath(n.path); if (!f) continue;
+        payload.push({ paperId: n.paperId, path: n.path, title: n.file || n.name, status: n.status === '未分类' ? null : n.status, rating: n.rating,
+          mtime: n.mtime, sections: noteSections(await app.vault.cachedRead(f), template) });
+      }
+      const res = await http('PUT', '/me/notes', { body: { notes: payload } });
+      // 笔记里写的是链接或旧 ID 的，换成论文库里的 ID（约定 3.3）
+      for (const n of local) { const next = res.sync?.ids?.[n.paperId]; if (next && next !== n.paperId) { try { await setFM(n.path, 'paper_id', next); n.paperId = next; } catch (e) {} } }
+      if (res.sync?.queued?.length) toast('从笔记的“要追的论文”加进阅读队列 ' + res.sync.queued.length + ' 篇');
+      return res;
+    } catch (e) { if (force) toast('笔记没同步成功：' + errorText(e)); return null; } finally { notesSync = null; }
+  })();
+  return notesSync;
 }
 async function ensureFolder(path) {
   let current = '';
@@ -955,14 +1021,16 @@ R.research = async c => {
     });
   });
 
-  const cands = sec(c, '候选关键词', tree.candidates.length + ' 个 · 一级领域里正在兴起、还不在你关键词树里的方向');
+  await readingProfile(c);
+  const cands = sec(c, '候选关键词', tree.candidates.length + ' 个 · 正在兴起、或你笔记里反复提到，还不在你关键词树里的方向');
   if (!tree.candidates.length) empty(cands, '暂无候选关键词。');
   tree.candidates.forEach(cand => {
     const parent = [...tree.domains, ...tree.domains.flatMap(d => d.children)].find(n => n.id === cand.parentId);
     const card = H(cands, 'article', 'rpd-card'); const head = H(card, 'div', 'rpd-card-head'); H(head, 'h3', 'rpd-card-title', cand.label); H(head, 'span', 'rpd-muted', LEVEL[cand.level] + ' · 归入“' + (parent?.label || '?') + '”');
     H(card, 'p', 'rpd-sum', cand.reason);
-    H(card, 'p', 'rpd-muted', '近 ' + cand.growth.windowDays + ' 天 ' + cand.growth.paperCount + ' 篇，变化 ' + (cand.growth.changePct > 0 ? '+' : '') + cand.growth.changePct + '%');
-    if (cand.examples.length) { const line = H(card, 'div', 'rpd-brief-sources'); H(line, 'span', 'rpd-muted', '代表论文：'); cand.examples.forEach((ref, i) => { if (i) H(line, 'span', 'rpd-muted', ' · '); paperRef(line, ref); }); }
+    H(card, 'p', 'rpd-muted', cand.source === 'notes' ? '来自 ' + cand.growth.paperCount + ' 篇阅读笔记'
+      : '近 ' + cand.growth.windowDays + ' 天 ' + cand.growth.paperCount + ' 篇，变化 ' + (cand.growth.changePct > 0 ? '+' : '') + cand.growth.changePct + '%');
+    if (cand.examples.length) { const line = H(card, 'div', 'rpd-brief-sources'); H(line, 'span', 'rpd-muted', cand.source === 'notes' ? '出自笔记：' : '代表论文：'); cand.examples.forEach((ref, i) => { if (i) H(line, 'span', 'rpd-muted', ' · '); paperRef(line, ref); }); }
     const bar = H(card, 'div', 'rpd-bar');
     btn(bar, '采纳', 'rpd-primary', () => save(() => http('POST', '/me/interests/candidates/' + enc(cand.id) + '/accept'), '已加入关键词树'));
     btn(bar, '忽略', 'rpd-ghost', () => save(() => http('POST', '/me/interests/candidates/' + enc(cand.id) + '/reject'), '已忽略，不会再推荐'));
@@ -982,6 +1050,27 @@ R.research = async c => {
   });
 };
 
+// 阅读笔记要点：后端从笔记“和我的研究的关系”“想法与疑问”两节整理出来，每日初筛时参考（约定 5.18）。
+async function readingProfile(c) {
+  const box = sec(c, '阅读笔记要点', '每天推荐前从你的笔记里整理，初筛时和关键词树一起参考');
+  const tools = H(box, 'div', 'rpd-tools');
+  btn(tools, '立刻同步笔记', '', async () => { await loadNotes(); const r = await syncNotes(true); if (r) { toast('已同步 ' + r.items.length + ' 篇笔记'); render(); } });
+  const res = await get('/me/notes');
+  if (!shown(box, res, '阅读笔记')) return;
+  const d = res.data;
+  H(box, 'p', 'rpd-muted', '已同步 ' + d.items.length + ' 篇笔记' + (d.updatedAt ? '（' + fmtTime(d.updatedAt) + '）' : '') + '，其中 ' + d.items.filter(n => n.seed).length + ' 篇算精读过，当邻近推荐的种子。');
+  if (d.skipped.length) { const w = H(box, 'div', 'rpd-warn'); H(w, 'span', '', d.skipped.length + ' 篇笔记没用上：'); d.skipped.forEach(sk => { const row = H(w, 'div', 'rpd-row'); fileLink(row, sk.path, sk.path.split('/').pop().replace(/\.md$/, '')); H(row, 'span', 'rpd-muted', sk.reason); }); }
+  if (!d.profile) { empty(box, '还没有整理过：写好笔记里“和我的研究的关系”或“想法与疑问”，下次每日推荐时整理（也可以在流程明细里重跑“整理阅读笔记”）。'); return; }
+  H(box, 'p', 'rpd-sum', d.profile.summary);
+  [['interest', '你关心的'], ['doubt', '你存疑的']].forEach(([kind, label]) => {
+    const pts = d.profile.points.filter(p => p.kind === kind); if (!pts.length) return;
+    H(box, 'h4', '', label);
+    const ul = H(box, 'ul', 'rpd-list');
+    pts.forEach(p => { const li = H(ul, 'li'); H(li, 'span', '', p.text); p.papers.slice(0, 3).forEach(ref => { H(li, 'span', 'rpd-muted', ' · '); paperRef(li, ref); }); });
+  });
+  H(box, 'p', 'rpd-muted', '整理于 ' + fmtTime(d.profile.generatedAt));
+}
+
 // 每日推荐设置：改一项存一项（只提交改了的那部分，后端合并）。研究方向的文字（论文流的检索词等）在后端的 data/profile.json。
 async function recommendSettings(c) {
   const box = sec(c, '每日推荐', '流程怎么跑；检索词、方向说明在后端的 data/profile.json 里改');
@@ -999,6 +1088,8 @@ async function recommendSettings(c) {
   const multi = (g, label, options, value, patch) => { const row = H(g, 'div', 'rpd-field rpd-field-inline'); H(row, 'span', '', label); const cur = new Set(value);
     options.forEach(([k, name]) => { const lab = H(row, 'label', 'rpd-check'); const cb = H(lab, 'input'); cb.type = 'checkbox'; cb.checked = cur.has(k); H(lab, 'span', '', name);
       cb.addEventListener('change', async () => { cb.checked ? cur.add(k) : cur.delete(k); if (!(await put(patch(options.map(o => o[0]).filter(x => cur.has(x)))))) { cb.checked = !cb.checked; cb.checked ? cur.add(k) : cur.delete(k); } }); }); };
+  const text = (g, label, value, patch) => { const f = H(g, 'label', 'rpd-field rpd-field-inline'); H(f, 'span', '', label); const i = H(f, 'input', 'rpd-input'); i.value = value; let saved = value;
+    i.addEventListener('change', async () => { const v = i.value.trim(); if (!v) { toast(label + '不能为空'); i.value = saved; return; } if (await put(patch(v))) saved = v; else i.value = saved; }); };
   const CATS = [['core', '核心'], ['adjacent', '邻近'], ['trending', '热点']];
 
   let g = group('运行');
@@ -1032,6 +1123,18 @@ async function recommendSettings(c) {
   number(g, '每天精选几篇', s.pick.max, 0, 30, v => ({ pick: { max: v } }));
   [['relevance', '相关程度'], ['quality', '质量分'], ['hf', '点赞'], ['code', '有代码']].forEach(([k, n]) => number(g, '打分权重 · ' + n, s.pick.weights[k], 0, 1, v => ({ pick: { weights: { [k]: v } } }), 0.05));
   multi(g, '直接进论文库的类别（不勾就要你标“相关”才进）', CATS, s.library.autoAdd, v => ({ library: { autoAdd: v } }));
+
+  g = group('阅读笔记');
+  H(g, 'p', 'rpd-muted', '面板把阅读笔记按小节同步给后端；下面三个小节名要和模板（' + (CFG.noteTemplate || DEFAULT_CONFIG.noteTemplate) + '）里的标题一致，改了模板标题就改这里。');
+  check(g, '整理笔记里的要点，初筛时参考（回应了你关心的问题，没命中关键词也算核心；用了你存疑的思路，精选分打折）', s.notes.screening, v => ({ notes: { screening: v } }));
+  text(g, '“关心什么”读这一节', s.notes.sections.relation, v => ({ notes: { sections: { relation: v } } }));
+  text(g, '“想法和存疑”读这一节', s.notes.sections.ideas, v => ({ notes: { sections: { ideas: v } } }));
+  check(g, '精读过的论文当邻近推荐的种子（新论文引用了它就推出来）', s.notes.asSeeds, v => ({ notes: { asSeeds: v } }));
+  multi(g, '算“精读过”的状态', [['粗读', '粗读'], ['精读', '精读'], ['已读', '已读']], s.notes.seedStatuses, v => ({ notes: { seedStatuses: v } }));
+  number(g, '或者评分达到（0 表示不看评分）', s.notes.seedMinRating, 0, 5, v => ({ notes: { seedMinRating: v } }));
+  check(g, '把这一节里的论文加进阅读队列（写链接或论文 ID；每篇只加一次）', s.notes.followToQueue, v => ({ notes: { followToQueue: v } }));
+  text(g, '“要追的论文”读这一节', s.notes.sections.follow, v => ({ notes: { sections: { follow: v } } }));
+  check(g, '从笔记里提候选关键词（在“我的研究领域”里采纳或忽略）', s.notes.candidates, v => ({ notes: { candidates: v } }));
 
   g = group('每周');
   check(g, '新中稿入库（按领域检索的检索词和会议清单查新中稿，筛选通过的直接入库）', s.weekly.newAccepted, v => ({ weekly: { newAccepted: v } }));
@@ -1120,14 +1223,17 @@ async function render() {
 await Promise.all([loadNotes(), loadExperiments()]);
 try { const h = await http('GET', '/health'); TASK_TYPES = h.taskTypes || null; TZ_NAME = h.timezone || undefined; } catch (e) {}
 render();
-resolveNoteIds();
+resolveNoteIds().then(() => syncNotes());
 
 // 笔记或实验记录变化时，只重画依赖它们的页签（防抖，避免边打字边刷新）。
-let localTimer;
+// 阅读笔记改了，停下来 10 秒后同步给后端。
+let localTimer, syncTimer;
 const ref = app.metadataCache.on('changed', file => {
-  if (disposed || !(file.path.startsWith(NOTE_DIR) || file.path.startsWith(EXPERIMENT_DIR))) return;
+  const isNote = file.path.startsWith(NOTE_DIR) || notes.some(n => n.path === file.path);
+  if (disposed || !(isNote || file.path.startsWith(EXPERIMENT_DIR))) return;
   clearTimeout(localTimer);
   localTimer = setTimeout(async () => { await Promise.all([loadNotes(), loadExperiments()]); if (!disposed && ['home', 'experiments', 'lib', 'watched', 'research'].includes(tab)) render(); }, 1000);
+  if (isNote) { clearTimeout(syncTimer); syncTimer = setTimeout(async () => { if (disposed) return; await loadNotes(); syncNotes(); }, 10000); }
 });
 const observer = new MutationObserver(() => { if (!root.isConnected) { disposed = true; app.metadataCache.offref(ref); observer.disconnect(); toastEl.remove(); } });
 observer.observe(document.body, { childList: true, subtree: true });
