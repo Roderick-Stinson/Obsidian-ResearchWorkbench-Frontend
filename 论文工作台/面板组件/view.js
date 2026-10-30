@@ -398,7 +398,7 @@ function addPaperForm(parent, mark) {
 // ---------- 页签状态 ----------
 let tab = input?.page === 'research' ? 'research' : 'home';
 const T = {
-  issue: { date: null, q: '' },
+  issue: { date: null, q: '', domain: undefined },
   watched: { q: '', status: '全部' },
   teams: { q: '' },
   lib: { q: '', sort: 'relevance', rating: '', watched: false, f: {}, open: {}, page: 0 },
@@ -444,6 +444,7 @@ R.home = async c => {
     if (!b.picks.length) empty(picks, '今天暂无精选论文。');
     b.picks.forEach(p => { const row = H(picks, 'div', 'rpd-home-paper'); paperRef(row, p); if (p.titleZh && p.titleZh !== p.title) H(row, 'div', 'rpd-zh', p.titleZh); if (p.reason) H(row, 'p', 'rpd-muted', '入选理由：' + p.reason); if (p.summary) H(row, 'p', 'rpd-sum', p.summary); });
     btn(picks, '查看完整论文推荐', 'rpd-ghost', () => goTab('issue'));
+    get('/recommendations/backlog').then(r => { if (r.data?.total) { const p = H(picks, 'p', 'rpd-muted', '另外还有 ' + r.data.total + ' 篇之前的精选你没看，在“论文推荐”页顶上。'); } });
     const added = H(c, 'section', 'rpd-overview-panel'); const ah = H(added, 'div', 'rpd-panel-head'); H(ah, 'h3', '', '今日新收录论文'); H(ah, 'span', 'rpd-progress-value', b.newCount + ' 篇');
     if (!b.todayNew.length) empty(added, '今天暂无新收录论文。');
     else { const list = H(added, 'details', 'rpd-home-more'); H(list, 'summary', '', '展开今日论文'); b.todayNew.forEach((p, i) => { const row = H(list, 'div', 'rpd-home-paper'); const hd = H(row, 'div', 'rpd-home-paper-head'); H(hd, 'span', 'rpd-home-index', String(i + 1).padStart(2, '0')); const body = H(hd, 'div', 'rpd-home-paper-body'); paperRef(body, p); if (p.titleZh && p.titleZh !== p.title) H(body, 'div', 'rpd-zh', p.titleZh); if (p.summary) H(body, 'p', 'rpd-sum', p.summary); if (p.publishedAt) H(body, 'span', 'rpd-muted', '发表：' + p.publishedAt); }); }
@@ -506,8 +507,12 @@ function recCard(el, p, redraw) {
   if (p.picked) H(meta, 'span', 'rpd-tag good', '今日精选');
   (p.sources || []).forEach(s => H(meta, 'span', 'rpd-tag soft', s));
   if (p.matchedKeywords.length) { const tags = H(el, 'div', 'rpd-tags'); p.matchedKeywords.forEach(k => H(tags, 'span', 'rpd-tag soft', k.label)); }
+  if (p.date) H(meta, 'span', 'rpd-tag soft', p.date + ' 的精选');
   const bar = H(el, 'div', 'rpd-bar');
   userControls(bar, p, redraw);
+  // 跳过：不想看这篇，之后不再出现在“之前没看的精选”里（和“不相关”不同，不会当成反例）
+  const skipped = p.user.flags.includes('跳过');
+  chip(bar, skipped ? '已跳过' : '跳过', skipped, () => patchUser(p, { flags: skipped ? p.user.flags.filter(f => f !== '跳过') : [...p.user.flags, '跳过'] }, redraw));
   btn(bar, queueIds?.includes(p.id) ? '已在队列' : '加入阅读队列', 'rpd-ghost', async () => { await addToQueue(p.id); redraw(); });
   noteButton(bar, p);
   deepReadButtons(bar, el, p);
@@ -600,7 +605,7 @@ function mount(parent, draw, data, cls) { const holder = H(parent, 'article', cl
 
 R.issue = async c => {
   H(c, 'h2', 'rpd-issue-h', '论文推荐');
-  H(c, 'p', 'rpd-muted', '按与你的研究兴趣的关系分三类，不设比例，找到多少就是多少。标“相关 / 不相关”会用来整理你的关键词树。');
+  H(c, 'p', 'rpd-muted', '每个研究领域（关键词树的一级领域）一个标签页，领域里再按与你的关系分核心 / 邻近 / 热点；不属于你任何领域的热门论文在最后一个标签页。标“相关 / 不相关”会用来整理你的关键词树；不想看的点“跳过”。');
   const top = H(c, 'div', 'rpd-tools');
   taskBtn(top, '立刻刷新今天的推荐', '', 'run-daily', () => startTask('run-daily', {}, '刷新今天的推荐'));
   H(top, 'span', 'rpd-muted', '平时每天按“设置 → 每日推荐”里的时间自动运行；全文速读较慢，可能要几十分钟。');
@@ -615,18 +620,63 @@ R.issue = async c => {
   issues.forEach(i => { const o = H(select, 'option', '', i.date + ' · ' + (i.counts.core + i.counts.adjacent + i.counts.trending) + ' 篇'); o.value = i.date; });
   select.value = T.issue.date; select.addEventListener('change', () => { T.issue.date = select.value; render(); });
   const search = H(tools, 'input', 'rpd-search'); search.type = 'search'; search.placeholder = '搜索这一期'; search.value = T.issue.q;
-  const [day] = await Promise.all([get('/recommendations/' + T.issue.date), loadQueue()]);
+  const latest = T.issue.date === issues[0].date;
+  const [day, back] = await Promise.all([get('/recommendations/' + T.issue.date), latest ? get('/recommendations/backlog') : Promise.resolve(null), loadQueue()]);
   const data = shown(c, day, T.issue.date + ' 的推荐');
   if (!data) return;
-  const list = H(c, 'div');
-  function fill() {
-    list.empty(); const q = T.issue.q.toLowerCase();
+  const back_ = back?.data || null;
+  const match = (p, q) => (p.titleZh + ' ' + p.titleEn + ' ' + p.summary + ' ' + p.id).toLowerCase().includes(q);
+  const domOf = p => p.domain?.id || null;
+  function byCategory(parent, papers) {
     Object.entries(CATEGORY).forEach(([key, [name, hint]]) => {
-      const papers = data.papers.filter(p => p.category === key && (p.titleZh + ' ' + p.titleEn + ' ' + p.summary + ' ' + p.id).toLowerCase().includes(q));
-      const s = sec(list, name + ' · ' + papers.length + ' 篇', hint);
-      if (!papers.length) empty(s, q ? '没有符合搜索的论文。' : '这一类今天没有找到论文。');
-      papers.forEach(p => mount(s, recCard, p));
+      const ps = papers.filter(p => p.category === key);
+      if (!ps.length) return;
+      const h = H(parent, 'div', 'rpd-cat-head'); H(h, 'h4', '', name + ' · ' + ps.length + ' 篇'); H(h, 'span', 'rpd-muted', hint);
+      ps.forEach(p => mount(parent, recCard, p));
     });
+  }
+  // 按研究领域（关键词树的一级领域）分标签页；不属于任何领域的单独一页放最后。旧的推荐没有分领域，按三类显示。
+  const hasDomains = data.papers.some(p => 'domain' in p);
+  const tabs = hasDomains ? [...(data.domains || []).map(d => [d.id, d.label]), [null, '不属于你的研究领域']] : [];
+  const tabBar = H(c, 'div', 'rpd-tabs');
+  const list = H(c, 'div');
+  if (hasDomains && !tabs.some(([id]) => id === T.issue.domain)) {
+    // 默认打开第一个有论文的领域
+    T.issue.domain = (tabs.find(([id]) => data.papers.some(p => domOf(p) === id) || back_?.papers.some(p => domOf(p) === id)) || tabs[0])[0];
+  }
+  function backlogBox(parent, papers) {
+    if (!papers.length) return;
+    const det = H(parent, 'details', 'rpd-backlog'); det.open = true;
+    H(det, 'summary', '', '之前没看的精选 · ' + papers.length + ' 篇');
+    H(det, 'p', 'rpd-muted', '最近 ' + back_.days + ' 天的精选里你还没处理的（没评分、没标记、没加队列、没写笔记、没点“跳过”），越新、分越高越靠前；超过 ' + back_.days + ' 天的不再提醒，在往期推荐里还能找到。' + (back_.total > back_.papers.length ? '一共 ' + back_.total + ' 篇，这里只显示最值得看的 ' + back_.papers.length + ' 篇。' : ''));
+    papers.forEach(p => mount(det, recCard, p));
+  }
+  function fill() {
+    list.empty(); tabBar.empty(); const q = T.issue.q.toLowerCase();
+    const papers = data.papers.filter(p => match(p, q));
+    const backPapers = (back_?.papers || []).filter(p => match(p, q));
+    if (!hasDomains) {
+      backlogBox(list, backPapers);
+      Object.entries(CATEGORY).forEach(([key, [name, hint]]) => {
+        const ps = papers.filter(p => p.category === key);
+        const s = sec(list, name + ' · ' + ps.length + ' 篇', hint);
+        if (!ps.length) empty(s, q ? '没有符合搜索的论文。' : '这一类今天没有找到论文。');
+        ps.forEach(p => mount(s, recCard, p));
+      });
+      return;
+    }
+    tabs.forEach(([id, label]) => {
+      const n = papers.filter(p => domOf(p) === id).length, nb = backPapers.filter(p => domOf(p) === id).length;
+      const b = H(tabBar, 'button', 'rpd-tab' + (T.issue.domain === id ? ' is-active' : ''));
+      b.type = 'button'; H(b, 'span', '', label); H(b, 'span', 'rpd-tab-n', String(n) + (nb ? ' + ' + nb + ' 未看' : ''));
+      b.addEventListener('click', () => { T.issue.domain = id; fill(); });
+    });
+    const id = T.issue.domain;
+    backlogBox(list, backPapers.filter(p => domOf(p) === id));
+    const ps = papers.filter(p => domOf(p) === id);
+    if (id === null) H(list, 'p', 'rpd-muted', 'Hugging Face 等处的热门论文，和你的研究领域都不直接相关；精选里最多放几篇（设置里改）。');
+    if (!ps.length) empty(list, q ? '没有符合搜索的论文。' : '这一期没有这个领域的论文。');
+    else byCategory(list, ps);
   }
   search.addEventListener('input', () => { T.issue.q = search.value; fill(); });
   fill();
@@ -1200,7 +1250,10 @@ async function recommendSettings(c) {
   g = group('速读与精选');
   multi(g, '读全文的类别', CATS, s.skim.fullText, v => ({ skim: { fullText: v } }));
   number(g, '每天全文速读最多几篇（其余只看摘要）', s.skim.maxFullTextPerDay, 0, 500, v => ({ skim: { maxFullTextPerDay: v } }));
-  number(g, '每天精选几篇', s.pick.max, 0, 30, v => ({ pick: { max: v } }));
+  number(g, '每天精选几篇（各研究领域轮流挑）', s.pick.max, 0, 30, v => ({ pick: { max: v } }));
+  number(g, '其中不属于你研究领域的最多几篇', s.pick.outsideMax, 0, 30, v => ({ pick: { outsideMax: v } }));
+  number(g, '“之前没看的精选”回看几天', s.backlog.days, 1, 60, v => ({ backlog: { days: v } }));
+  number(g, '“之前没看的精选”最多显示几篇', s.backlog.max, 0, 50, v => ({ backlog: { max: v } }));
   [['relevance', '相关程度'], ['quality', '质量分'], ['hf', '点赞'], ['code', '有代码']].forEach(([k, n]) => number(g, '打分权重 · ' + n, s.pick.weights[k], 0, 1, v => ({ pick: { weights: { [k]: v } } }), 0.05));
   multi(g, '直接进论文库的类别（不勾就要你标“相关”才进）', CATS, s.library.autoAdd, v => ({ library: { autoAdd: v } }));
 

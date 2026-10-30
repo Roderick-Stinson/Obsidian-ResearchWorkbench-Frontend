@@ -275,3 +275,16 @@
 .rpd-root .rpd-team-people{margin:6px 0 8px;}
 .rpd-root .rpd-team-people .rpd-row{justify-content:flex-start;padding:5px 0;}
 .rpd-root .rpd-team-people .rpd-row .rpd-muted{flex:1;}
+
+/* 推荐页：之前没看的精选、领域里的类别小标题 */
+.rpd-root .rpd-backlog{margin:12px 0 18px;padding:10px 14px;border:1px solid var(--background-modifier-border);border-radius:10px;background:var(--background-secondary);}
+.rpd-root .rpd-backlog > summary{cursor:pointer;font-weight:600;font-size:14px;margin-bottom:6px;}
+.rpd-root .rpd-cat-head{display:flex;gap:10px;align-items:baseline;margin:14px 0 6px;}
+.rpd-root .rpd-cat-head h4{margin:0;font-size:13px;}
+
+/* 推荐页的研究领域标签页 */
+.rpd-root .rpd-tabs{display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--background-modifier-border);margin:14px 0 12px;}
+.rpd-root .rpd-tab{font:inherit;font-size:13px;box-shadow:none;height:auto;padding:8px 14px;border:0;border-bottom:2px solid transparent;border-radius:0;background:none;color:var(--text-muted);cursor:pointer;display:flex;gap:6px;align-items:baseline;}
+.rpd-root .rpd-tab:hover{color:var(--text-normal);}
+.rpd-root .rpd-tab.is-active{color:var(--text-normal);font-weight:600;border-bottom-color:var(--interactive-accent);}
+.rpd-root .rpd-tab-n{font-size:11px;font-weight:400;color:var(--text-muted);}
