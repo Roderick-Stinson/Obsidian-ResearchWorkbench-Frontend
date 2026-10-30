@@ -45,7 +45,7 @@ async function renderMd(el, markdown) {
 }
 
 // ---------- 连接后端（地址和 token 存在 config.json） ----------
-const DEFAULT_CONFIG = { apiBase: 'http://127.0.0.1:8765/api/v1', token: '' };
+const DEFAULT_CONFIG = { apiBase: 'http://127.0.0.1:8765/api/v1', token: '', noteTemplate: '论文工作台/模板/精读笔记.md' };
 let CFG = { ...DEFAULT_CONFIG }, configError = '';
 try { if (await app.vault.adapter.exists(CONFIG_FILE)) CFG = { ...DEFAULT_CONFIG, ...JSON.parse(await app.vault.adapter.read(CONFIG_FILE)) }; } catch (e) { configError = 'config.json 读取失败，已使用默认地址：' + e.message; }
 async function saveConfig(next) { CFG = { ...DEFAULT_CONFIG, ...next }; await app.vault.adapter.write(CONFIG_FILE, JSON.stringify(CFG, null, 2)); }
@@ -197,7 +197,7 @@ function openPdf(id) {
 const NOTE_DIR = '论文阅读/论文笔记整理/';
 let notes = [];
 async function loadNotes() {
-  const src = dv.pages().where(p => p.file.ext === 'md' && !p.file.path.startsWith('Templates/') && (p.file.path.startsWith(NOTE_DIR) || p.file.tags.includes('#paper'))).array();
+  const src = dv.pages().where(p => p.file.ext === 'md' && !p.file.path.startsWith('Templates/') && !p.file.path.startsWith('论文工作台/模板/') &&(p.file.path.startsWith(NOTE_DIR) || p.file.tags.includes('#paper'))).array();
   notes = src.map(p => ({ path: p.file.path, name: p.file.name.replace(/- /g, ': '), status: String(p.status || '未分类'), paperId: p.paper_id ? String(p.paper_id) : '', mtime: p.file.mtime?.toMillis?.() || 0 }));
   notes.sort((a, b) => b.mtime - a.mtime);
 }
@@ -221,18 +221,49 @@ async function ensureFolder(path) {
     if (!app.vault.getAbstractFileByPath(current)) { try { await app.vault.createFolder(current); } catch (error) { if (!app.vault.getAbstractFileByPath(current)) throw error; } }
   }
 }
+// 按模板（设置页里可改路径）生成笔记：{{title}} / {{date}} / {{time}} 的写法和 Obsidian 自带的「模板」插件一致，
+// 再把论文信息填进模板里空着的「- 链接：」「- 作者 / 会议：」两行（模板里没有这两行就不填）。找不到模板时返回 null。
+async function templateText(paper) {
+  const f = app.vault.getAbstractFileByPath(CFG.noteTemplate || DEFAULT_CONFIG.noteTemplate);
+  if (!f) return null;
+  const m = window.moment();
+  let text = (await app.vault.read(f)).replace(/{{\s*(title|date|time)\s*(?::([^}]*))?}}/gi, (_, key, fmt) => {
+    key = key.toLowerCase();
+    return key === 'title' ? (paper.title || paper.id) : m.format(fmt?.trim() || (key === 'date' ? 'YYYY-MM-DD' : 'HH:mm'));
+  });
+  const fill = (label, value) => {
+    if (!value) return;
+    const re = new RegExp('^(\\s*[-*] ' + label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[：:])[ \\t]*$', 'm');
+    text = text.replace(re, (_, head) => head + value);
+  };
+  const authors = paper.authors?.length ? paper.authors.slice(0, 3).join(', ') + (paper.authors.length > 3 ? ' 等' : '') : '';
+  const venue = [paper.venue, paper.year && !String(paper.venue || '').includes(String(paper.year)) ? paper.year : ''].filter(Boolean).join(' ');
+  fill('链接', paper.urls?.source || paper.versions?.[0]?.url || paper.url || '');
+  fill('作者 / 会议', [authors, venue].filter(Boolean).join(' · '));
+  return text;
+}
 async function createPaperNote(paper, body) {
   try {
     await loadNotes();
     const existing = noteFor(paper.id);
     if (existing) { open(existing.path); return; }
+    try { paper = { ...paper, ...(await http('GET', '/papers/' + enc(paper.id))) }; } catch (e) {}  // 卡片上的字段不全，取完整的论文信息；取不到就用卡片上的
     await ensureFolder(NOTE_DIR.replace(/\/$/, ''));
     const safeName = String(paper.titleZh || paper.title || paper.id).replace(/[\\/:*?"<>|#^[\]]/g, ' ').trim().slice(0, 80) || paper.id;
     let path = NOTE_DIR + safeName + '.md', suffix = 2;
     while (app.vault.getAbstractFileByPath(path)) path = NOTE_DIR + safeName + '-' + suffix++ + '.md';
-    const text = ['---', 'tags:', '  - paper', 'status: 待读', 'paper_id: ' + JSON.stringify(paper.id), '---', '', '# ' + (paper.title || paper.id), '', body || ['## 粗读摘要', '', '', '## 精读记录', ''].join('\n')].join('\n');
-    await app.vault.create(path, text);
-    await loadNotes(); open(path); toast('已创建阅读笔记');
+    const fromTemplate = body ? null : await templateText(paper);
+    const text = fromTemplate ?? ['---', 'tags:', '  - paper', 'status: 待读', '---', '', '# ' + (paper.title || paper.id), '', body || ['## 粗读摘要', '', '', '## 精读记录', ''].join('\n')].join('\n');
+    const file = await app.vault.create(path, text);
+    // paper_id 等字段不依赖模板怎么写：模板里删了也会补上
+    await app.fileManager.processFrontMatter(file, fm => {
+      fm.paper_id = paper.id;
+      const tags = Array.isArray(fm.tags) ? fm.tags : fm.tags ? [fm.tags] : [];
+      if (!tags.includes('paper')) fm.tags = [...tags, 'paper'];
+      if (!fm.status) fm.status = '待读';
+    });
+    await loadNotes(); open(path);
+    toast(fromTemplate || body ? '已创建阅读笔记' : '找不到模板 ' + (CFG.noteTemplate || DEFAULT_CONFIG.noteTemplate) + '，已按内置格式创建阅读笔记');
   } catch (e) { toast('无法创建阅读笔记：' + e.message); }
 }
 function noteButton(bar, paper) {
@@ -244,7 +275,7 @@ function noteButton(bar, paper) {
 const EXPERIMENT_DIR = '实验记录/';
 let experiments = [];
 function loadExperiments() {
-  experiments = dv.pages().where(p => p.file.ext === 'md' && !p.file.path.startsWith('Templates/') && (p.file.path.startsWith(EXPERIMENT_DIR) || p.type === 'experiment' || p.file.tags.includes('#experiment'))).array().map(p => ({
+  experiments = dv.pages().where(p => p.file.ext === 'md' && !p.file.path.startsWith('Templates/') && !p.file.path.startsWith('论文工作台/模板/') &&(p.file.path.startsWith(EXPERIMENT_DIR) || p.type === 'experiment' || p.file.tags.includes('#experiment'))).array().map(p => ({
     path: p.file.path, title: String(p.title || p.file.name), server: String(p.server || '未填写'), status: String(p.status || '未分类'), summary: String(p.summary || ''), updated: p.file.mtime?.toMillis?.() || 0
   })).sort((a, b) => b.updated - a.updated);
 }
@@ -1016,9 +1047,16 @@ R.set = async c => {
   const f2 = H(conn, 'label', 'rpd-field'); H(f2, 'span', '', 'token（本机运行时留空；迁到服务器后必须设置）');
   const token = H(f2, 'input', 'rpd-input'); token.type = 'password'; token.value = CFG.token;
   const tools = H(conn, 'div', 'rpd-tools'); const result = H(conn, 'p', 'rpd-muted');
-  btn(tools, '保存', 'rpd-primary', async () => { try { await saveConfig({ apiBase: base.value.trim() || DEFAULT_CONFIG.apiBase, token: token.value.trim() }); toast('已保存后端连接'); render(); } catch (e) { toast('保存失败：' + e.message); } });
+  btn(tools, '保存', 'rpd-primary', async () => { try { await saveConfig({ ...CFG, apiBase: base.value.trim() || DEFAULT_CONFIG.apiBase, token: token.value.trim() }); toast('已保存后端连接'); render(); } catch (e) { toast('保存失败：' + e.message); } });
   btn(tools, '测试连接', '', async () => { try { const h = await http('GET', '/health'); result.setText('已连接 · 后端版本 ' + h.version + ' · ' + fmtTime(h.time)); } catch (e) { result.setText(errorText(e)); } updateStatus(); });
   if (!requestUrlFn) H(conn, 'p', 'rpd-muted', '当前环境没有 Obsidian 的 requestUrl，改用 fetch 访问后端。');
+
+  const noteSec = sec(c, '阅读笔记', '「建阅读笔记」按这个模板生成笔记，存到 ' + NOTE_DIR);
+  const f3 = H(noteSec, 'label', 'rpd-field'); H(f3, 'span', '', '模板路径（vault 里的相对路径）');
+  const tpl = H(f3, 'input', 'rpd-input'); tpl.value = CFG.noteTemplate;
+  const noteTools = H(noteSec, 'div', 'rpd-tools');
+  btn(noteTools, '保存', 'rpd-primary', async () => { try { await saveConfig({ ...CFG, noteTemplate: tpl.value.trim() || DEFAULT_CONFIG.noteTemplate }); toast('已保存模板路径'); render(); } catch (e) { toast('保存失败：' + e.message); } });
+  btn(noteTools, '打开模板', '', () => app.vault.getAbstractFileByPath(tpl.value.trim()) ? open(tpl.value.trim()) : toast('找不到 ' + tpl.value.trim()));
 
   const prefs = sec(c, '推荐偏好');
   const p = await get('/me/preferences');

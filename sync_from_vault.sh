@@ -8,6 +8,9 @@ DST="$(cd "$(dirname "$0")" && pwd)/论文工作台"
 mkdir -p "$DST/面板组件"
 cp "$SRC/论文面板.md" "$SRC/我的研究领域.md" "$DST/"
 cp "$SRC/面板组件/view.js" "$SRC/面板组件/view.css" "$DST/面板组件/"
+# 精读笔记模板（「建阅读笔记」按它生成笔记）
+mkdir -p "$DST/模板"
+cp "$SRC/模板/"*.md "$DST/模板/"
 # 约定：schemas、examples、校验脚本和说明；--delete 让删掉的 schema 也同步删掉
 rsync -a --delete --exclude '.DS_Store' "$SRC/后端约定/" "$DST/后端约定/"
 echo "已同步：$SRC → $DST"
