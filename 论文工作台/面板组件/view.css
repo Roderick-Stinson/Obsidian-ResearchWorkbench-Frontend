@@ -68,6 +68,7 @@
 .rpd-root h3.rpd-card-title{font-size:15px;font-weight:600;line-height:1.5;margin:0;}
 .rpd-root .rpd-quality{font-size:11px;white-space:nowrap;color:var(--text-accent);background:var(--background-primary);border-radius:4px;padding:2px 7px;}
 .rpd-root .rpd-en{font-size:12px;color:var(--text-muted);margin:3px 0 8px;font-style:italic;}
+.rpd-root .rpd-zh{font-size:13px;color:var(--text-muted);margin:3px 0 8px;}
 .rpd-root .rpd-sum{font-size:13px;line-height:1.65;margin:0 0 10px;}
 .rpd-root .rpd-meta{display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:12px;color:var(--text-muted);margin-bottom:8px;}
 .rpd-root .rpd-tags{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;}

@@ -162,7 +162,9 @@ function userControls(bar, paper, redraw) {
 }
 // 收录时没拿到标题的论文，title 就是它的 ID（约定 5.5）：显示“未知标题”和原文链接，让你认出是哪篇再补上。
 const titleKnown = p => !!p.title && p.title !== p.id;
-const paperTitle = p => p.titleZh || (titleKnown(p) ? p.title : '未知标题');
+// 先论文原题，后面才是 AI 写的中文结论式标题（zhLine）和总结；没拿到原题的才用中文标题顶上。
+const paperTitle = p => titleKnown(p) ? p.title : p.titleZh || '未知标题';
+const zhLine = (el, p) => { if (p.titleZh && titleKnown(p) && p.titleZh !== p.title) H(el, 'div', 'rpd-zh', p.titleZh); };
 function sourceUrl(id) {
   if (id.startsWith('openreview-')) return 'https://openreview.net/forum?id=' + id.slice(11);
   if (id.startsWith('arxiv-')) return 'https://arxiv.org/abs/' + id.slice(6);
@@ -315,7 +317,8 @@ async function createPaperNote(paper, body) {
     if (existing) { open(existing.path); return; }
     try { paper = { ...paper, ...(await http('GET', '/papers/' + enc(paper.id))) }; } catch (e) {}  // 卡片上的字段不全，取完整的论文信息；取不到就用卡片上的
     await ensureFolder(NOTE_DIR.replace(/\/$/, ''));
-    const safeName = String(paper.titleZh || paper.title || paper.id).replace(/[\\/:*?"<>|#^[\]]/g, ' ').trim().slice(0, 80) || paper.id;
+    // 文件名不能有冒号：写成“- ”（读笔记时再显示回“: ”），引号等去掉
+    const safeName = String((titleKnown(paper) && paper.title) || paper.titleZh || paper.id).replace(/\s*:\s*/g, '- ').replace(/[\\/*?"<>|#^[\]]/g, '').replace(/\s+/g, ' ').trim().slice(0, 100) || paper.id;
     let path = NOTE_DIR + safeName + '.md', suffix = 2;
     while (app.vault.getAbstractFileByPath(path)) path = NOTE_DIR + safeName + '-' + suffix++ + '.md';
     const fromTemplate = body ? null : await templateText(paper);
@@ -439,11 +442,11 @@ R.home = async c => {
   if (b) {
     const picks = H(c, 'section', 'rpd-overview-panel'); const ph = H(picks, 'div', 'rpd-panel-head'); H(ph, 'h3', '', '今日精选'); H(ph, 'span', 'rpd-progress-value', b.pickedCount + ' 篇');
     if (!b.picks.length) empty(picks, '今天暂无精选论文。');
-    b.picks.forEach(p => { const row = H(picks, 'div', 'rpd-home-paper'); paperRef(row, p); if (p.reason) H(row, 'p', 'rpd-muted', '入选理由：' + p.reason); if (p.summary) H(row, 'p', 'rpd-sum', p.summary); });
+    b.picks.forEach(p => { const row = H(picks, 'div', 'rpd-home-paper'); paperRef(row, p); if (p.titleZh && p.titleZh !== p.title) H(row, 'div', 'rpd-zh', p.titleZh); if (p.reason) H(row, 'p', 'rpd-muted', '入选理由：' + p.reason); if (p.summary) H(row, 'p', 'rpd-sum', p.summary); });
     btn(picks, '查看完整论文推荐', 'rpd-ghost', () => goTab('issue'));
     const added = H(c, 'section', 'rpd-overview-panel'); const ah = H(added, 'div', 'rpd-panel-head'); H(ah, 'h3', '', '今日新收录论文'); H(ah, 'span', 'rpd-progress-value', b.newCount + ' 篇');
     if (!b.todayNew.length) empty(added, '今天暂无新收录论文。');
-    else { const list = H(added, 'details', 'rpd-home-more'); H(list, 'summary', '', '展开今日论文'); b.todayNew.forEach((p, i) => { const row = H(list, 'div', 'rpd-home-paper'); const hd = H(row, 'div', 'rpd-home-paper-head'); H(hd, 'span', 'rpd-home-index', String(i + 1).padStart(2, '0')); const body = H(hd, 'div', 'rpd-home-paper-body'); paperRef(body, p); if (p.summary) H(body, 'p', 'rpd-sum', p.summary); if (p.publishedAt) H(body, 'span', 'rpd-muted', '发表：' + p.publishedAt); }); }
+    else { const list = H(added, 'details', 'rpd-home-more'); H(list, 'summary', '', '展开今日论文'); b.todayNew.forEach((p, i) => { const row = H(list, 'div', 'rpd-home-paper'); const hd = H(row, 'div', 'rpd-home-paper-head'); H(hd, 'span', 'rpd-home-index', String(i + 1).padStart(2, '0')); const body = H(hd, 'div', 'rpd-home-paper-body'); paperRef(body, p); if (p.titleZh && p.titleZh !== p.title) H(body, 'div', 'rpd-zh', p.titleZh); if (p.summary) H(body, 'p', 'rpd-sum', p.summary); if (p.publishedAt) H(body, 'span', 'rpd-muted', '发表：' + p.publishedAt); }); }
   }
 
   const queue = H(c, 'details', 'rpd-overview-panel rpd-home-alerts'); H(queue, 'summary', '', '阅读队列 · ' + queueIds.length + ' 篇');
@@ -490,9 +493,9 @@ R.experiments = async c => {
 const CATEGORY = { core: ['核心', '与你的关键词树直接匹配'], adjacent: ['邻近', '和你标为相关的论文有引用关系，但不在你的关键词里'], trending: ['热点', '一级领域里增长快、讨论多，不看关键词'] };
 function recCard(el, p, redraw) {
   const head = H(el, 'div', 'rpd-card-head');
-  H(head, 'h3', 'rpd-card-title', p.titleZh);
+  H(head, 'h3', 'rpd-card-title', p.titleEn || p.titleZh);
   H(head, 'span', 'rpd-quality', '质量 ' + p.quality.score.toFixed(1));
-  H(el, 'div', 'rpd-en', p.titleEn);
+  if (p.titleEn && p.titleZh && p.titleZh !== p.titleEn) H(el, 'div', 'rpd-zh', p.titleZh);
   H(el, 'p', 'rpd-sum', p.summary);
   const why = H(el, 'p', 'rpd-reason'); H(why, 'span', 'rpd-tag accent', CATEGORY[p.category][0]); H(why, 'span', '', ' ' + p.reason);
   const meta = H(el, 'div', 'rpd-meta');
@@ -671,7 +674,7 @@ R.watched = async c => {
     count.setText('重点关注 · ' + rows.length + ' / ' + data.total + ' 篇');
     if (!rows.length) return empty(list, data.items.length ? '没有符合条件的关注论文。' : '还没有重点关注的论文。点“添加关注论文”贴上链接，或在论文推荐、论文库里点“重点关注”。整理关键词时会读这些论文的 PDF。');
     table(list, ['论文', '讨论状态', '发表状态', '发表来源', '年份', '第一作者', '被引', '资料'], rows.map(p => [
-      td => { H(td, 'div', 'rpd-row-t', paperTitle(p)); if (p.titleZh && titleKnown(p)) H(td, 'div', 'rpd-en', p.title); titleTools(H(td, 'div', 'rpd-tools'), p, fill); },
+      td => { H(td, 'div', 'rpd-row-t', paperTitle(p)); zhLine(td, p); titleTools(H(td, 'div', 'rpd-tools'), p, fill); },
       td => selectCell(td, DISCUSSION, p.user.discussionStatus || '', '未设置', async v => { const u = await act(() => http('PATCH', '/me/papers/' + enc(p.id), { body: { discussionStatus: v || null } }), '讨论状态已保存'); if (u) p.user = u; return !!u; }),
       td => selectCell(td, PUB_STATUS, p.publicationStatus, null, v => savePaperField(p, 'publicationStatus', v)),
       td => inputCell(td, p.venue, '如 ICML 2025', v => savePaperField(p, 'venue', v)),
@@ -702,7 +705,7 @@ function libCard(el, p, redraw) {
   const head = H(el, 'div', 'rpd-card-head');
   H(head, 'h3', 'rpd-card-title', paperTitle(p));
   if (p.libraryRelevance) H(head, 'span', 'rpd-quality' + (p.libraryRelevance === 'core' ? '' : ' is-soft'), RELEVANCE[p.libraryRelevance]);
-  if (p.titleZh && titleKnown(p)) H(el, 'div', 'rpd-en', p.title);
+  zhLine(el, p);
   if (!titleKnown(p)) titleTools(H(el, 'div', 'rpd-tools'), p, redraw);
   if (p.summary) H(el, 'p', 'rpd-sum', p.summary);
   const meta = H(el, 'div', 'rpd-meta');
