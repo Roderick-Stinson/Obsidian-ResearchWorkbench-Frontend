@@ -9,7 +9,7 @@
 第一次用的话，先看后端 README 里的[从零开始](https://github.com/Roderick-Stinson/Obsidian-ResearchWorkbench-Backend#从零开始)：要写哪个配置文件、先做什么后做什么都在那里。下面只是面板本身的安装。
 
 1. 把 `论文工作台/` 文件夹整个放到 vault 根目录，保持 `论文面板.md` 与 `面板组件/` 同级。
-2. 安装并启用 [Dataview](https://github.com/blacksmithgu/obsidian-dataview) 插件，在它的设置里打开 JavaScript 查询。
+2. 安装并启用 [Dataview](https://github.com/blacksmithgu/obsidian-dataview) 插件，在它的设置里打开 JavaScript 查询。其他插件都是可选的，见下面的[插件](#插件)。
 3. 按后端仓库的 README 安装并启动后端：
    ```bash
    cd ~/PaperWorkbench && .venv/bin/python -m pwb serve
@@ -18,6 +18,33 @@
 5. 后端地址默认是 `http://127.0.0.1:8765/api/v1`。要改地址或设置 token，在面板“设置 → 后端连接”里改，会保存到 `面板组件/config.json`（这个文件不要提交，里面可能有 token）。
 
 后端没启动时，面板显示上次成功同步的数据（缓存在 Obsidian 本地，不写进 vault），并提示“后端未连接”。改了 `view.js` 或 `view.css` 之后，用命令面板运行 `Dataview: Rebuild current view`。
+
+## 插件
+
+**必装**
+
+- [Dataview](https://github.com/blacksmithgu/obsidian-dataview)：面板本身就是一段 Dataview JS，设置里要打开 JavaScript 查询。
+
+**在阅读笔记里贴论文的图（可选，推荐）**
+
+三个第三方插件配合着用：每篇笔记的图放在它自己的文件夹里，粘贴时起名，没人引用的图定期清掉。
+
+- [Custom Attachment Location](https://github.com/mnaoumov/obsidian-custom-attachment-location)：决定图放在哪。下面的设置名以 17.x 版为准。
+  - 关掉「Follow Obsidian attachment location」，否则图还是落在 vault 根目录。
+  - 「Location for new attachments」填 `./assets/{{noteFileName}}`，图就放在笔记旁边的 `assets/<笔记名>/` 里；笔记改名或移动时文件夹跟着走。
+  - 「生成的附件文件名」填 `Pasted image {{date:{momentJsFormat:'YYYYMMDDHHmmss'}}}`（`image` 后面有个空格）。
+  - 「Move/renames → 附件重命名模式」选「仅粘贴的图片」。
+- [Paste Image Rename](https://github.com/reorx/obsidian-paste-image-rename)：粘贴时弹框起名，比如 `Fig3-框架图`，和原文的图号对上。
+  - 「Image name pattern」填 `Fig`（默认的 `{{fileName}}` 是笔记名，也就是论文标题，太长）。
+  - 「Auto rename」「Handle all attachments」都关着。
+  - 它只认 `Pasted image ` 开头的文件，所以上面要让 Custom Attachment Location 把粘贴的图先起成这个名字。很多截图工具（比如 macOS 上把截图存成文件再复制的那类）往剪贴板里放的是一个文件，名字是一串 UUID，不这样设就不弹框。
+- [Clear Unused Images](https://github.com/ozntel/oz-clear-unused-images-obsidian)：找出已经没有笔记引用的图。删除方式选移到回收站，不要选永久删除。
+
+另外在 Obsidian 的「设置 → 文件与链接」里打开「始终更新内部链接」，移动、改名时链接才不会断。
+
+贴图的写法：图下面另起一行写出处和你从图里看出了什么，例如 `*Fig. 3（原文）：先生成拓扑，再逐节点分配角色*`。图本身不同步给后端，这行说明会。
+
+**Obsidian 自带的「模板」插件（可选）**：只在不经过面板、直接在 Obsidian 里新建阅读笔记时用，见[阅读笔记](#阅读笔记)。
 
 ## 每日推荐
 
@@ -33,9 +60,9 @@
 
 ## 阅读笔记
 
-- 论文卡片上点“建阅读笔记”，按 `论文工作台/模板/精读笔记.md` 生成笔记：替换 `{{title}}`、`{{date}}`、`{{time}}`（写法和 Obsidian 自带的“模板”插件一样），填好“链接”“作者 / 会议”两行，并在 frontmatter 写入 `paper_id`。
+- 论文卡片上点“建阅读笔记”，按 `论文工作台/模板/精读笔记.md` 生成笔记：替换 `{{title}}`、`{{date}}`、`{{time}}`（写法和 Obsidian 自带的“模板”插件一样），填好“链接”“作者”两行，并在 frontmatter 写入 `paper_id`、`venue`（还没发表的写“预印本”）和 `year`。
 - 模板随意改；路径在“设置 → 阅读笔记”里改。模板里删掉 `paper_id`、`tags` 或“链接”那两行也没关系：前两个面板会补上，后两行没有就不填。
-- 笔记会同步给后端，推荐时参考（后端不读 vault，由面板按小节发过去）：精读过的论文当邻近推荐的种子，“要追的论文”里的链接加进阅读队列，“和我的研究的关系”“想法与疑问”整理成阅读要点（在“我的研究领域”里看）。`我的论文/` 下的、frontmatter 写了 `sync: false` 的不发。改了这三节的标题，到“设置 → 每日推荐 → 阅读笔记”里改成一样的。
+- 笔记会同步给后端，推荐时参考（后端不读 vault，由面板按小节发过去）：精读过的论文当邻近推荐的种子，“要追的论文”里的链接加进阅读队列，“和我的研究的关系”“想法与疑问”整理成阅读要点（在“我的研究领域”里看）。`我的论文/` 下的、frontmatter 写了 `sync: false` 的不发；贴进笔记的图片也不发，图下面写的说明照发。改了这三节的标题，到“设置 → 每日推荐 → 阅读笔记”里改成一样的。
 - `paper_id` 可以填 arXiv / OpenReview 链接，同步后换成论文 ID。
 - 想在 Obsidian 里直接新建笔记，把“设置 → 模板 → 模板文件夹位置”设成 `论文工作台/模板`，再用“模板：插入模板”，`paper_id` 手动填。
 
