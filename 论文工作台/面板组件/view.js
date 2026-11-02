@@ -1435,6 +1435,7 @@ async function recommendSettings(c) {
   check(g, '同时读 PDF 第一页，认出通讯作者、补上 OpenAlex 没有的机构（用大模型）', s.authors.readPdf, v => ({ authors: { readPdf: v } }));
   number(g, '每天最多补几篇（全库一次补完用“团队”页的“整理作者机构”）', s.authors.maxPerDay, 0, 1000, v => ({ authors: { maxPerDay: v } }));
   check(g, '关注的人的新论文进每日推荐（邻近类）', s.authors.followRecommend, v => ({ authors: { followRecommend: v } }));
+  number(g, '关注的人的新论文回看几天（新论文进 OpenAlex 有时要过一阵子）', s.authors.followLookbackDays, 1, 365, v => ({ authors: { followLookbackDays: v } }));
 
   g = group('阅读笔记');
   H(g, 'p', 'rpd-muted', '面板把阅读笔记按小节同步给后端；下面三个小节名要和模板（' + (CFG.noteTemplate || DEFAULT_CONFIG.noteTemplate) + '）里的标题一致，改了模板标题就改这里。');
