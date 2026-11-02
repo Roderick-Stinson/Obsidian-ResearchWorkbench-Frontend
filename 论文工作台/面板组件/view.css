@@ -288,3 +288,11 @@
 .rpd-root .rpd-tab:hover{color:var(--text-normal);}
 .rpd-root .rpd-tab.is-active{color:var(--text-normal);font-weight:600;border-bottom-color:var(--interactive-accent);}
 .rpd-root .rpd-tab-n{font-size:11px;font-weight:400;color:var(--text-muted);}
+
+/* 分类页 */
+.rpd-root .rpd-scheme-cats{display:flex;flex-direction:column;gap:6px;margin:6px 0;}
+.rpd-root .rpd-scheme-cat{display:grid;grid-template-columns:minmax(160px,1fr) 2fr auto;gap:6px;align-items:center;}
+.rpd-root .rpd-scheme-dist{display:flex;flex-direction:column;gap:4px;margin:10px 0;}
+.rpd-root .rpd-dist-row{display:grid;grid-template-columns:minmax(120px,220px) 1fr 60px;gap:8px;align-items:center;font-size:13px;}
+.rpd-root .rpd-dist-bar{height:10px;border-radius:5px;background:var(--interactive-accent);opacity:.7;min-width:2px;}
+.rpd-root .rpd-dist-n{color:var(--text-muted);font-size:12px;}

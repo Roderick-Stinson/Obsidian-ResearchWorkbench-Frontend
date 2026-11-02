@@ -401,6 +401,7 @@ const T = {
   issue: { date: null, q: '', domain: undefined },
   watched: { q: '', status: '全部' },
   teams: { q: '' },
+  schemes: { id: null, cat: undefined, form: null, suggestScope: { kind: 'topic', value: '' } },
   lib: { q: '', sort: 'relevance', rating: '', watched: false, f: {}, open: {}, page: 0 },
   must: { tier: '全部', period: '全部' },
   map: { sec: '发展史', stream: null },
@@ -598,6 +599,148 @@ R.teams = async c => {
     const line = H(el, 'div', 'rpd-brief-sources'); H(line, 'span', 'rpd-muted', '论文：');
     g.papers.forEach((ref, i) => { if (i) H(line, 'span', 'rpd-muted', ' · '); paperRef(line, ref); });
   }, g));
+};
+
+// ---------- 分类：按你提出的分类依据给论文分类，只做展示（约定 5.20） ----------
+const SCOPE_KINDS = [['topic', '论文库的一个方向'], ['query', '搜索词'], ['watched', '重点关注'], ['own', '本人论文'], ['all', '全库']];
+const scopeText = sc => ({ topic: '方向“' + sc.value + '”', query: '搜索“' + sc.value + '”', watched: '重点关注', own: '本人论文', all: '全库' })[sc.kind];
+// 选范围：方向从论文库的方向里挑，搜索词自己填。scope 对象就地修改。
+async function scopePicker(parent, scope) {
+  const row = H(parent, 'div', 'rpd-tools');
+  const kind = H(row, 'select', 'rpd-select'); SCOPE_KINDS.forEach(([k, l]) => { H(kind, 'option', '', l).value = k; }); kind.value = scope.kind;
+  const slot = H(row, 'span');
+  let topics = [];
+  try { topics = (await http('GET', '/papers/topics')).items; } catch (e) {}
+  const draw = () => {
+    slot.empty();
+    if (scope.kind === 'topic') {
+      const sel = H(slot, 'select', 'rpd-select'); topics.forEach(t => { H(sel, 'option', '', t.label + '（' + t.count + ' 篇）').value = t.label; });
+      if (!topics.some(t => t.label === scope.value)) scope.value = topics[0]?.label || '';
+      sel.value = scope.value; sel.addEventListener('change', () => { scope.value = sel.value; });
+    } else if (scope.kind === 'query') {
+      const i = H(slot, 'input', 'rpd-input'); i.placeholder = '标题、摘要里的词，例如 credit assignment'; i.value = scope.value || '';
+      i.addEventListener('input', () => { scope.value = i.value; });
+    }
+  };
+  kind.addEventListener('change', () => { scope.kind = kind.value; if (!['topic', 'query'].includes(scope.kind)) delete scope.value; draw(); });
+  draw();
+}
+// 新建 / 修改方案的表单。draft：{id?, name, scope, categories: [{id?, name, description}], multi}
+async function schemeForm(c, draft) {
+  const box = sec(c, draft.id ? '修改分类方案' : '新建分类方案', '类别的说明写清楚判断标准，大模型按它归类；归不进任何一类的算“都不是”');
+  const f1 = H(box, 'label', 'rpd-field'); H(f1, 'span', '', '方案名字（分类依据）');
+  const name = H(f1, 'input', 'rpd-input'); name.value = draft.name || ''; name.placeholder = '例如：MAS 的生成方式';
+  H(box, 'div', 'rpd-muted', '范围：分哪些论文');
+  await scopePicker(box, draft.scope);
+  H(box, 'div', 'rpd-muted', '类别');
+  const list = H(box, 'div', 'rpd-scheme-cats');
+  const drawCats = () => {
+    list.empty();
+    draft.categories.forEach((cat, i) => {
+      const row = H(list, 'div', 'rpd-scheme-cat');
+      const n = H(row, 'input', 'rpd-input'); n.placeholder = '类别名，例如：用 LLM 生成 MAS'; n.value = cat.name || ''; n.addEventListener('input', () => { cat.name = n.value; });
+      const d = H(row, 'input', 'rpd-input'); d.placeholder = '说明（判断标准），例如：由 LLM 通过提示或写代码直接给出架构'; d.value = cat.description || ''; d.addEventListener('input', () => { cat.description = d.value; });
+      btn(row, '删除', 'rpd-ghost', () => { draft.categories.splice(i, 1); drawCats(); });
+    });
+  };
+  drawCats();
+  const tools = H(box, 'div', 'rpd-tools');
+  btn(tools, '加一个类别', '', () => { draft.categories.push({ name: '', description: '' }); drawCats(); });
+  const ml = H(tools, 'label', 'rpd-check'); const mcb = H(ml, 'input'); mcb.type = 'checkbox'; mcb.checked = !!draft.multi; H(ml, 'span', '', '一篇论文可以同时属于几类');
+  const bar = H(box, 'div', 'rpd-tools');
+  btn(bar, draft.id ? '保存' : '保存并开始分类', 'rpd-primary', async () => {
+    const cats = draft.categories.filter(x => (x.name || '').trim()).map(x => ({ ...(x.id ? { id: x.id } : {}), name: x.name.trim(), description: (x.description || '').trim() }));
+    if (!name.value.trim()) return toast('写一下方案名字');
+    if (cats.length < 2) return toast('至少要两个类别');
+    if (draft.scope.kind === 'query' && !(draft.scope.value || '').trim()) return toast('写一下搜索词');
+    const body = { name: name.value.trim(), scope: draft.scope, categories: cats, multi: mcb.checked };
+    const r = await act(() => draft.id ? http('PATCH', '/schemes/' + enc(draft.id), { body }) : http('POST', '/schemes', { body }), '已保存方案');
+    if (!r) return;
+    T.schemes.form = null; T.schemes.id = r.scheme.id; T.schemes.cat = undefined;
+    if (r.scheme.pendingCount) await startTask('classify-scheme', { schemeId: r.scheme.id }, '按“' + r.scheme.name + '”分类 ' + r.scheme.pendingCount + ' 篇');
+    render();
+  });
+  btn(bar, '取消', 'rpd-ghost', () => { T.schemes.form = null; render(); });
+}
+R.schemes = async c => {
+  const t = T.schemes;
+  H(c, 'h2', 'rpd-issue-h', '分类');
+  H(c, 'p', 'rpd-muted', '按你提出的分类依据，把论文库里一部分论文分好类看分布，例如“用神经网络生成 MAS / 用 LLM 生成 MAS”。只做展示，不改关键词树，也不影响推荐。可以存很多个方案切换着看；想不好怎么分，就让 AI 先提几种分法。');
+  const list = await get('/schemes');
+  const schemes = shown(c, list, '分类方案')?.items || [];
+  const bar = H(c, 'div', 'rpd-tools');
+  schemes.forEach(s => chip(bar, s.name + (s.pendingCount ? '（' + s.pendingCount + ' 篇未分）' : ''), t.id === s.id && !t.form, () => { t.id = s.id; t.cat = undefined; t.form = null; render(); }));
+  btn(bar, '新建方案', 'rpd-primary', () => { t.form = { name: '', scope: { kind: 'topic', value: '' }, categories: [{ name: '', description: '' }, { name: '', description: '' }], multi: false }; render(); });
+  if (t.form) return schemeForm(c, t.form);
+
+  // 让 AI 提分法
+  const sug = H(c, 'details', 'rpd-backlog');
+  const sugRes = await get('/schemes/suggestions');
+  sug.open = !schemes.length;
+  H(sug, 'summary', '', '让 AI 提几种分法' + (sugRes.data ? '（上次：' + scopeText(sugRes.data.scope) + '，' + fmtTime(sugRes.data.generatedAt) + '）' : ''));
+  H(sug, 'p', 'rpd-muted', '选一个范围，大模型读一遍里面的论文（最近的 150 篇，标题和一句话总结），提出 3 种分类依据，每种附类别和大概的篇数。挑一个，改一改再建方案。');
+  await scopePicker(sug, t.suggestScope);
+  const st = H(sug, 'div', 'rpd-tools');
+  taskBtn(st, '提出分法', '', 'suggest-schemes', () => {
+    if (t.suggestScope.kind === 'query' && !(t.suggestScope.value || '').trim()) return toast('写一下搜索词');
+    startTask('suggest-schemes', { scope: { ...t.suggestScope } }, '让 AI 提分法（' + scopeText(t.suggestScope) + '）');
+  });
+  (sugRes.data?.items || []).forEach(x => {
+    const card = H(sug, 'article', 'rpd-card'); const head = H(card, 'div', 'rpd-card-head'); H(head, 'h3', 'rpd-card-title', x.name);
+    H(head, 'span', 'rpd-muted', (x.multi ? '可多选' : '单选') + ' · ' + scopeText(sugRes.data.scope) + ' ' + sugRes.data.paperCount + ' 篇');
+    if (x.rationale) H(card, 'p', 'rpd-sum', x.rationale);
+    const ul = H(card, 'ul', 'rpd-list'); x.categories.forEach(cat => { const li = H(ul, 'li'); H(li, 'strong', '', cat.name); H(li, 'span', 'rpd-muted', ' · 约 ' + cat.estimate + ' 篇 · ' + cat.description); });
+    btn(H(card, 'div', 'rpd-bar'), '用这个分法建方案', '', () => { t.form = { name: x.name, scope: { ...sugRes.data.scope }, categories: x.categories.map(cat => ({ name: cat.name, description: cat.description })), multi: x.multi }; render(); });
+  });
+
+  if (!schemes.length) return empty(c, '还没有分类方案。点“新建方案”，或者先让 AI 提几种分法。');
+  if (!schemes.some(s => s.id === t.id)) t.id = schemes[0].id;
+  const res = await get('/schemes/' + enc(t.id));
+  const d = shown(c, res, '分类方案');
+  if (!d) return;
+  const s = d.scheme;
+  const head = sec(c, s.name, scopeText(s.scope) + ' · ' + s.paperCount + ' 篇 · ' + (s.multi ? '可多选' : '单选'));
+  const tools = H(head, 'div', 'rpd-tools');
+  if (s.pendingCount) taskBtn(tools, (s.pendingCount === s.paperCount ? '开始分类 ' : '分剩下的 ') + s.pendingCount + ' 篇', 'rpd-primary', 'classify-scheme', () => startTask('classify-scheme', { schemeId: s.id }, '按“' + s.name + '”分类 ' + s.pendingCount + ' 篇'));
+  btn(tools, '修改方案', '', () => { t.form = { id: s.id, name: s.name, scope: { ...s.scope }, categories: s.categories.map(x => ({ ...x })), multi: s.multi }; render(); });
+  btn(tools, '删除方案', 'rpd-ghost', async () => { if (!confirm('删除分类方案“' + s.name + '”？分好的结果也一起删掉。')) return; if (await act(() => http('DELETE', '/schemes/' + enc(s.id)), '已删除')) { t.id = null; render(); } });
+  const done = s.paperCount - s.pendingCount;
+  if (s.pendingCount) H(head, 'p', 'rpd-warn', s.pendingCount + ' 篇还没分（新进论文库的，或者改过类别之后要重分的）。');
+  // 分布：各类篇数，再按年份
+  const cats = [...d.categories, { id: null, name: '都不是', count: d.noneCount }];
+  const dist = H(head, 'div', 'rpd-scheme-dist');
+  cats.forEach(cat => { const row = H(dist, 'div', 'rpd-dist-row'); H(row, 'span', 'rpd-dist-l', cat.name);
+    const bar = H(row, 'span', 'rpd-dist-bar'); bar.style.width = (done ? Math.max(2, 100 * cat.count / done) : 0) + '%'; H(row, 'span', 'rpd-dist-n', cat.count + ' 篇'); });
+  if (d.byYear.length > 1) {
+    const years = H(head, 'details', 'rpd-home-more'); H(years, 'summary', '', '按年份看');
+    table(years, ['年份', ...d.categories.map(x => x.name), '都不是'], d.byYear.map(y => [String(y.year), ...d.categories.map(x => String(y.counts[x.id] || 0)), String(y.none)]));
+  }
+  // 每个类别一个标签页
+  const tabBar = H(c, 'div', 'rpd-tabs');
+  const tabs = [...cats.map(x => [x.id, x.name, x.count]), ...(s.pendingCount ? [['pending', '还没分', s.pendingCount]] : [])];
+  if (!tabs.some(([id]) => id === t.cat)) t.cat = tabs[0][0];
+  tabs.forEach(([id, label, n]) => { const b = H(tabBar, 'button', 'rpd-tab' + (t.cat === id ? ' is-active' : '')); b.type = 'button'; H(b, 'span', '', label); H(b, 'span', 'rpd-tab-n', String(n));
+    b.addEventListener('click', () => { t.cat = id; render(); }); });
+  const desc = d.categories.find(x => x.id === t.cat)?.description; if (desc) H(c, 'p', 'rpd-muted', desc);
+  const rows = d.papers.filter(r => t.cat === 'pending' ? r.pending : !r.pending && (t.cat === null ? !r.categories.length : r.categories.includes(t.cat)));
+  if (!rows.length) empty(c, '这一类没有论文。');
+  const holder = H(c, 'div', 'rpd-cards');
+  rows.forEach(r => mount(holder, (el, r, redraw) => {
+    const p = r.paper;
+    const hd = H(el, 'div', 'rpd-card-head'); H(hd, 'h3', 'rpd-card-title', paperTitle(p));
+    zhLine(el, p);
+    if (r.reason) { const why = H(el, 'p', 'rpd-reason'); H(why, 'span', 'rpd-tag ' + (r.source === 'user' ? 'accent' : 'soft'), r.source === 'user' ? '你改的' : '依据'); H(why, 'span', '', ' ' + r.reason); }
+    const meta = H(el, 'div', 'rpd-meta'); if (p.venue) H(meta, 'span', 'rpd-venue', p.venue); if (p.year) H(meta, 'span', '', String(p.year));
+    if (p.firstAuthor) H(meta, 'span', '', p.firstAuthor); if (p.institutions?.length) H(meta, 'span', 'rpd-inst', p.institutions.join(' · '));
+    const src = p.urls?.source || sourceUrl(p.id); if (src) extLink(meta, src, '原文');
+    if (r.pending) return;
+    // 手动改类别：单选点一个就换过去，多选可以点几个
+    const pick = H(el, 'div', 'rpd-bar'); H(pick, 'span', 'rpd-muted', '归到：');
+    const save = async next => { const res2 = await act(() => http('PUT', '/schemes/' + enc(s.id) + '/papers/' + enc(p.id), { body: { categories: next } }), '已改'); if (res2) { r.categories = next; r.source = 'user'; r.reason = '你手动改的'; redraw(); } };
+    d.categories.forEach(cat => { const on = r.categories.includes(cat.id);
+      chip(pick, cat.name, on, () => save(s.multi ? (on ? r.categories.filter(x => x !== cat.id) : [...r.categories, cat.id]) : (on ? [] : [cat.id]))); });
+    chip(pick, '都不是', !r.categories.length, () => save([]));
+  }, r));
 };
 
 // 卡片自带重画函数：改了评分、标记后只重画这一张，不重新拉整页数据。
@@ -1344,7 +1487,7 @@ function updateStatus() {
   pill.toggleClass('on', online === true); pill.toggleClass('off', online !== true); pillHint.setText(CFG.apiBase);
 }
 const nav = H(root, 'nav', 'rpd-nav');
-const NAV = [['home', '首页'], ['experiments', '实验记录'], ['issue', '论文推荐'], ['watched', '关注论文'], ['teams', '团队'], ['lib', '论文库'], ['must', '经典与必读'], ['map', '领域发展史'], ['hot', '热点'], ['res', '结果表'], ['idea', 'IDEA'], ['research', '我的研究领域'], ['rep', '报告'], ['inbox', '待认领'], ['set', '设置']];
+const NAV = [['home', '首页'], ['experiments', '实验记录'], ['issue', '论文推荐'], ['watched', '关注论文'], ['teams', '团队'], ['lib', '论文库'], ['schemes', '分类'], ['must', '经典与必读'], ['map', '领域发展史'], ['hot', '热点'], ['res', '结果表'], ['idea', 'IDEA'], ['research', '我的研究领域'], ['rep', '报告'], ['inbox', '待认领'], ['set', '设置']];
 const content = H(root, 'main', 'rpd-content');
 toastEl = document.body.createDiv({ cls: 'rpd-toast' });
 function goTab(next) { tab = next; render(); }
