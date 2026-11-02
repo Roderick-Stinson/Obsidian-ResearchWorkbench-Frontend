@@ -220,6 +220,10 @@
 .rpd-root .rpd-cards{display:flex;flex-direction:column;gap:12px;}
 .rpd-root .rpd-card{background:var(--background-primary);border:1px solid var(--background-modifier-border);}
 .rpd-root .rpd-quality.is-soft{color:var(--text-muted);}
+.rpd-root .rpd-read{display:inline-block;margin-left:8px;vertical-align:2px;font-size:11px;font-weight:600;line-height:1.5;border-radius:4px;padding:1px 7px;white-space:nowrap;cursor:help;}
+.rpd-root .rpd-read.is-done{background:var(--color-green);color:var(--text-on-accent);}
+.rpd-root .rpd-read.is-skim{background:color-mix(in srgb,var(--color-orange) 20%,transparent);color:var(--color-orange);}
+.rpd-root .rpd-read.is-unread{font-weight:400;color:var(--text-muted);border:1px dashed var(--background-modifier-border);}
 .rpd-root .rpd-venue{color:var(--text-accent);font-weight:500;}
 .rpd-root .rpd-btn.rpd-link{border:0;background:none;padding:0;color:var(--text-accent);font-size:12px;text-decoration:underline;}
 .rpd-root .rpd-tag.topic{background:color-mix(in srgb,var(--interactive-accent) 14%,transparent);color:var(--text-accent);}

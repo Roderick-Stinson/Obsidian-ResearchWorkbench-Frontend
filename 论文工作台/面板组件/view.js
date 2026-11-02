@@ -905,8 +905,17 @@ R.watched = async c => {
 const RELEVANCE = { core: '核心相关', related: '相关', none: '未判定' };
 const LIB_SORTS = [['relevance', '核心相关优先'], ['newest', '最新'], ['citations', '被引最多'], ['rating', '我的评价'], ['added', '最近加入']];
 const LIB_FACETS = [['reading', '读没读过'], ['status', '发表状态'], ['topic', '方向'], ['venue', '会议 / 期刊'], ['year', '年份'], ['relevance', '相关程度']];
-// 和后端的算法一致：标了“已读”或笔记是精读 / 已读的算已读，笔记是粗读或打过分的算粗读，其余算未读（点“已读”、打分后卡片马上跟着变，不用重新查）
-const readingOf = p => p.user.flags.includes('已读') || ['精读', '已读'].includes(p.noteStatus) ? '已读' : p.noteStatus === '粗读' || p.user.rating ? '粗读' : '未读';
+// 读没读过，和后端的算法一致：标了“已读”或笔记是精读 / 已读的算已读，笔记是粗读或打过分的算粗读，其余算未读。
+// 不单独存，每次按标记、评分和笔记现算；笔记的 status 用 vault 里最新的（后端的要等下次同步）。返回 [状态, 为什么]。
+function readingOf(p) {
+  const status = noteFor(p.id)?.status ?? p.noteStatus;
+  const why = status ? '笔记 status：' + status : '还没有阅读笔记';
+  if (p.user.flags.includes('已读')) return ['已读', '标了“已读”；' + why];
+  if (['精读', '已读'].includes(status)) return ['已读', why];
+  if (status === '粗读') return ['粗读', why];
+  if (p.user.rating) return ['粗读', '打过分（' + p.user.rating + ' 星）算粗读；' + why];
+  return ['未读', why];
+}
 const LIB_PAGE = 50;
 function sourceLabel(p) {
   if (p.id.startsWith('arxiv-')) return 'arXiv ' + p.id.slice(6);
@@ -917,10 +926,10 @@ function sourceLabel(p) {
 }
 function libCard(el, p, redraw) {
   const head = H(el, 'div', 'rpd-card-head');
-  H(head, 'h3', 'rpd-card-title', paperTitle(p));
+  const title = H(head, 'h3', 'rpd-card-title', paperTitle(p));
+  const [reading, why] = readingOf(p);  // 只显示一个阅读状态，紧跟在标题后面；为什么是这个状态放在悬停提示里
+  if (reading !== '未读' || noteFor(p.id)) H(title, 'span', 'rpd-read ' + ({ 已读: 'is-done', 粗读: 'is-skim' }[reading] || 'is-unread'), reading).title = why;
   if (p.libraryRelevance) H(head, 'span', 'rpd-quality' + (p.libraryRelevance === 'core' ? '' : ' is-soft'), RELEVANCE[p.libraryRelevance]);
-  const reading = readingOf(p);
-  if (reading !== '未读') H(head, 'span', 'rpd-tag ' + (reading === '已读' ? 'good' : 'soft'), reading);
   zhLine(el, p);
   if (!titleKnown(p)) titleTools(H(el, 'div', 'rpd-tools'), p, redraw);
   if (p.summary) H(el, 'p', 'rpd-sum', p.summary);
@@ -936,13 +945,14 @@ function libCard(el, p, redraw) {
   if (p.hasPdf) btn(meta, 'PDF', 'rpd-link', () => openPdf(p.id)); else if (p.urls?.pdf) extLink(meta, p.urls.pdf, 'PDF');
   if (p.urls?.code) extLink(meta, p.urls.code, '代码');
   if (p.user.own) H(meta, 'span', 'rpd-tag accent', '本人论文');
-  const note = noteFor(p.id); if (note) H(meta, 'span', 'rpd-tag soft', '笔记：' + note.status);
   const bar = H(el, 'div', 'rpd-lib-bar');
   const tags = H(bar, 'div', 'rpd-lib-tags'); p.topics.forEach(t => H(tags, 'span', 'rpd-tag topic', t));
   const acts = H(bar, 'div', 'rpd-lib-acts');
   star(acts, p.user.rating, v => patchUser(p, { rating: v }, redraw), '我的评价');
-  const read = p.user.flags.includes('已读');
-  chip(acts, read ? '✓ 已读' : '标为已读', read, () => patchUser(p, { flags: read ? p.user.flags.filter(f => f !== '已读') : [...p.user.flags, '已读'] }, redraw));
+  // 没读过才有“标为已读”；是你手动标的已读可以撤销；笔记里写了精读 / 已读的就不出按钮（改笔记的 status）
+  const flagged = p.user.flags.includes('已读');
+  if (flagged) btn(acts, '取消已读', 'rpd-ghost', () => patchUser(p, { flags: p.user.flags.filter(f => f !== '已读') }, redraw));
+  else if (reading !== '已读') btn(acts, '标为已读', 'rpd-ghost', () => patchUser(p, { flags: [...p.user.flags, '已读'] }, redraw));
   chip(acts, p.user.watched ? '已关注' : '关注', p.user.watched, () => patchUser(p, { watched: !p.user.watched }, redraw));
   btn(acts, queueIds?.includes(p.id) ? '已在队列' : '加入队列', 'rpd-ghost', async () => { await addToQueue(p.id); redraw(); });
   noteButton(acts, p);
