@@ -233,10 +233,17 @@ function noteSections(text, template = new Set()) {
   }
   return out.map(sec => ({ heading: sec.heading.slice(0, 200), level: sec.level, text: cleanSection(sec.lines, template) })).filter(sec => sec.text).slice(0, 200);
 }
+// 贴进笔记的图：![[x.png|600]] 或 ![](x.png)。图本身不发，图下面写的说明照发。
+const IMAGE_EMBED = /!\[\[[^\]]+?\.(png|jpe?g|gif|webp|svg|bmp|avif)(\|[^\]]*)?\]\]|!\[[^\]]*\]\([^)]+?\.(png|jpe?g|gif|webp|svg|bmp|avif)(\?[^)]*)?\)/gi;
 function cleanSection(lines, template) {
   const kept = [];
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+    let line = lines[i];
+    const noImage = line.replace(IMAGE_EMBED, '');
+    if (noImage !== line) {  // 只剩列表符号或引用符号的就整行不要
+      line = noImage.replace(/\s+$/, '');
+      if (/^\s*(>\s*)*([-*+]|\d+[.)])?\s*$/.test(line)) continue;
+    }
     if (/^\s*\|/.test(line)) {  // 一张表：没有哪一行数据填了两格以上就整张不要
       const table = []; while (i < lines.length && /^\s*\|/.test(lines[i])) table.push(lines[i++]); i--;
       const cells = r => r.trim().replace(/^\||\|$/g, '').split('|').map(x => x.trim());
@@ -290,7 +297,7 @@ async function ensureFolder(path) {
   }
 }
 // 按模板（设置页里可改路径）生成笔记：{{title}} / {{date}} / {{time}} 的写法和 Obsidian 自带的「模板」插件一致，
-// 再把论文信息填进模板里空着的「- 链接：」「- 作者 / 会议：」两行（模板里没有这两行就不填）。找不到模板时返回 null。
+// 再把论文信息填进模板里空着的「- 链接：」「- 作者：」（旧模板是「- 作者 / 会议：」）行（模板里没有这几行就不填）。找不到模板时返回 null。
 async function templateText(paper) {
   const f = app.vault.getAbstractFileByPath(CFG.noteTemplate || DEFAULT_CONFIG.noteTemplate);
   if (!f) return null;
@@ -307,8 +314,17 @@ async function templateText(paper) {
   const authors = paper.authors?.length ? paper.authors.slice(0, 3).join(', ') + (paper.authors.length > 3 ? ' 等' : '') : '';
   const venue = [paper.venue, paper.year && !String(paper.venue || '').includes(String(paper.year)) ? paper.year : ''].filter(Boolean).join(' ');
   fill('链接', paper.urls?.source || paper.versions?.[0]?.url || paper.url || '');
+  fill('作者', authors);
   fill('作者 / 会议', [authors, venue].filter(Boolean).join(' · '));
   return text;
+}
+// 笔记属性里的 venue：会议不带年份（“ICLR 2025”→“ICLR”，年份另放 year）；还没发表的写发表状态（预印本 / 投稿中），会议没核实的注明
+function noteVenue(paper) {
+  const year = paper.year ? String(paper.year) : '';
+  let v = String(paper.venue || '').trim();
+  if (year && v.endsWith(year)) v = v.slice(0, -year.length).trim();
+  if (!v) return paper.publicationStatus && paper.publicationStatus !== '已发表' ? paper.publicationStatus : '';
+  return paper.publicationStatus === '待核实' ? v + '（待核实）' : v;
 }
 async function createPaperNote(paper, body) {
   try {
@@ -330,6 +346,9 @@ async function createPaperNote(paper, body) {
       const tags = Array.isArray(fm.tags) ? fm.tags : fm.tags ? [fm.tags] : [];
       if (!tags.includes('paper')) fm.tags = [...tags, 'paper'];
       if (!fm.status) fm.status = '待读';
+      const venue = noteVenue(paper);
+      if (venue && !fm.venue) fm.venue = venue;
+      if (paper.year && !fm.year) fm.year = paper.year;
     });
     await loadNotes(); open(path);
     toast(fromTemplate || body ? '已创建阅读笔记' : '找不到模板 ' + (CFG.noteTemplate || DEFAULT_CONFIG.noteTemplate) + '，已按内置格式创建阅读笔记');
