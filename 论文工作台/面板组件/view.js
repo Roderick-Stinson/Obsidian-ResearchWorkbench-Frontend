@@ -904,7 +904,9 @@ R.watched = async c => {
 // ---------- 论文库（照原面板：分面筛选 + 卡片） ----------
 const RELEVANCE = { core: '核心相关', related: '相关', none: '未判定' };
 const LIB_SORTS = [['relevance', '核心相关优先'], ['newest', '最新'], ['citations', '被引最多'], ['rating', '我的评价'], ['added', '最近加入']];
-const LIB_FACETS = [['topic', '方向'], ['venue', '会议 / 期刊'], ['year', '年份'], ['status', '发表状态'], ['relevance', '相关程度']];
+const LIB_FACETS = [['reading', '读没读过'], ['status', '发表状态'], ['topic', '方向'], ['venue', '会议 / 期刊'], ['year', '年份'], ['relevance', '相关程度']];
+// 和后端的算法一致：标了“已读”或笔记是精读 / 已读的算已读，笔记是粗读或打过分的算粗读，其余算未读（点“已读”、打分后卡片马上跟着变，不用重新查）
+const readingOf = p => p.user.flags.includes('已读') || ['精读', '已读'].includes(p.noteStatus) ? '已读' : p.noteStatus === '粗读' || p.user.rating ? '粗读' : '未读';
 const LIB_PAGE = 50;
 function sourceLabel(p) {
   if (p.id.startsWith('arxiv-')) return 'arXiv ' + p.id.slice(6);
@@ -917,6 +919,8 @@ function libCard(el, p, redraw) {
   const head = H(el, 'div', 'rpd-card-head');
   H(head, 'h3', 'rpd-card-title', paperTitle(p));
   if (p.libraryRelevance) H(head, 'span', 'rpd-quality' + (p.libraryRelevance === 'core' ? '' : ' is-soft'), RELEVANCE[p.libraryRelevance]);
+  const reading = readingOf(p);
+  if (reading !== '未读') H(head, 'span', 'rpd-tag ' + (reading === '已读' ? 'good' : 'soft'), reading);
   zhLine(el, p);
   if (!titleKnown(p)) titleTools(H(el, 'div', 'rpd-tools'), p, redraw);
   if (p.summary) H(el, 'p', 'rpd-sum', p.summary);
@@ -937,6 +941,8 @@ function libCard(el, p, redraw) {
   const tags = H(bar, 'div', 'rpd-lib-tags'); p.topics.forEach(t => H(tags, 'span', 'rpd-tag topic', t));
   const acts = H(bar, 'div', 'rpd-lib-acts');
   star(acts, p.user.rating, v => patchUser(p, { rating: v }, redraw), '我的评价');
+  const read = p.user.flags.includes('已读');
+  chip(acts, read ? '✓ 已读' : '标为已读', read, () => patchUser(p, { flags: read ? p.user.flags.filter(f => f !== '已读') : [...p.user.flags, '已读'] }, redraw));
   chip(acts, p.user.watched ? '已关注' : '关注', p.user.watched, () => patchUser(p, { watched: !p.user.watched }, redraw));
   btn(acts, queueIds?.includes(p.id) ? '已在队列' : '加入队列', 'rpd-ghost', async () => { await addToQueue(p.id); redraw(); });
   noteButton(acts, p);
