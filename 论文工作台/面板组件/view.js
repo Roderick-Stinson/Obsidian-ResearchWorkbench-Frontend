@@ -155,7 +155,7 @@ async function addToQueue(id) {
 }
 function userControls(bar, paper, redraw) {
   const u = paper.user;
-  star(bar, u.rating, v => patchUser(paper, { rating: v }, redraw), '我的评价');
+  star(bar, u.rating, v => patchUser(paper, { rating: v }, async () => { await loadQueue(); redraw(); }), '我的评价');  // 打了分就移出阅读队列
   FLAGS.forEach(k => { const on = u.flags.includes(k); chip(bar, k, on, () => patchUser(paper, { flags: on ? u.flags.filter(f => f !== k) : [...u.flags, k] }, redraw)); });
   ['相关', '不相关'].forEach(k => chip(bar, k, u.relevance === k, () => patchUser(paper, { relevance: u.relevance === k ? null : k }, redraw)));
   chip(bar, u.watched ? '已重点关注' : '重点关注', u.watched, () => patchUser(paper, { watched: !u.watched }, redraw));
@@ -201,7 +201,6 @@ let notes = [];
 async function loadNotes() {
   const src = dv.pages().where(p => p.file.ext === 'md' && !p.file.path.startsWith('Templates/') && !p.file.path.startsWith('论文工作台/模板/') &&(p.file.path.startsWith(NOTE_DIR) || p.file.tags.includes('#paper'))).array();
   notes = src.map(p => ({ path: p.file.path, file: p.file.name, name: p.file.name.replace(/- /g, ': '), status: String(p.status || '未分类'), paperId: p.paper_id ? String(p.paper_id) : '',
-    rating: Number.isInteger(Number(p.rating)) && Number(p.rating) >= 0 && Number(p.rating) <= 5 && p.rating !== '' && p.rating != null ? Number(p.rating) : null,
     sync: p.sync !== false && String(p.sync).toLowerCase() !== 'false', mtime: p.file.mtime?.toMillis?.() || 0 }));
   notes.sort((a, b) => b.mtime - a.mtime);
 }
@@ -277,7 +276,7 @@ function syncNotes(force) {
       const payload = [];
       for (const n of local) {
         const f = app.vault.getAbstractFileByPath(n.path); if (!f) continue;
-        payload.push({ paperId: n.paperId, path: n.path, title: n.file || n.name, status: n.status === '未分类' ? null : n.status, rating: n.rating,
+        payload.push({ paperId: n.paperId, path: n.path, title: n.file || n.name, status: n.status === '未分类' ? null : n.status, rating: null,  // 评分只看面板上打的星
           mtime: n.mtime, sections: noteSections(await app.vault.cachedRead(f), template) });
       }
       const res = await http('PUT', '/me/notes', { body: { notes: payload } });
@@ -358,6 +357,21 @@ function noteButton(bar, paper) {
   const note = noteFor(paper.id);
   if (note) btn(bar, '阅读笔记', 'rpd-ghost', () => open(note.path)); else btn(bar, '建阅读笔记', 'rpd-ghost', () => createPaperNote(paper));
 }
+// 笔记的阅读状态只有这四个（单选）。在面板上选了写回笔记的 frontmatter，马上同步给后端（阅读队列里读过的会移出）。
+const NOTE_STATUSES = ['待读', '粗读', '精读', '已读'];
+function statusPicker(bar, paper, redraw) {
+  const note = noteFor(paper.id); if (!note) return;
+  const cur = note.status === '未分类' ? '' : note.status;
+  const sel = H(bar, 'select', 'rpd-select'); sel.setAttribute('aria-label', '阅读状态'); sel.title = '写回阅读笔记的 status';
+  if (!NOTE_STATUSES.includes(cur)) H(sel, 'option', '', cur ? '认不出的状态：' + cur : '阅读状态：没填').value = cur;
+  NOTE_STATUSES.forEach(s => { H(sel, 'option', '', '阅读状态：' + s).value = s; });
+  sel.value = cur;
+  sel.addEventListener('change', async () => {
+    try { await setFM(note.path, 'status', sel.value); } catch (e) { toast('没改成：' + errorText(e)); sel.value = cur; return; }
+    note.status = sel.value; note.mtime = Date.now();
+    await syncNotes(true); await loadQueue(); redraw();
+  });
+}
 
 // ---------- 实验记录（vault 里的真实数据） ----------
 const EXPERIMENT_DIR = '实验记录/';
@@ -421,7 +435,7 @@ const T = {
   watched: { q: '', status: '全部' },
   teams: { q: '' },
   schemes: { id: null, cat: undefined, form: null, suggestScope: { kind: 'topic', value: '' } },
-  lib: { q: '', sort: 'relevance', rating: '', watched: false, f: {}, open: {}, page: 0 },
+  lib: { q: '', sort: 'relevance', rating: '', watched: false, queued: false, f: {}, open: {}, page: 0 },
   must: { tier: '全部', period: '全部' },
   map: { sec: '发展史', stream: null },
   res: { cat: null, full: false, abl: false, view: '效果' },
@@ -947,7 +961,8 @@ function libCard(el, p, redraw) {
   const bar = H(el, 'div', 'rpd-lib-bar');
   const tags = H(bar, 'div', 'rpd-lib-tags'); p.topics.forEach(t => H(tags, 'span', 'rpd-tag topic', t));
   const acts = H(bar, 'div', 'rpd-lib-acts');
-  star(acts, p.user.rating, v => patchUser(p, { rating: v }, redraw), '我的评价');
+  star(acts, p.user.rating, v => patchUser(p, { rating: v }, async () => { await loadQueue(); redraw(); }), '我的评价');  // 打了分就移出阅读队列
+  statusPicker(acts, p, redraw);
   chip(acts, p.user.watched ? '已关注' : '关注', p.user.watched, () => patchUser(p, { watched: !p.user.watched }, redraw));
   btn(acts, queueIds?.includes(p.id) ? '已在队列' : '加入队列', 'rpd-ghost', async () => { await addToQueue(p.id); redraw(); });
   noteButton(acts, p);
@@ -970,12 +985,13 @@ R.lib = async c => {
   const rateSel = H(bar, 'select', 'rpd-select'); rateSel.setAttribute('aria-label', '我的评价');
   [['', '我的评价：全部'], ['unrated', '未评价'], ['3', '★3 及以上'], ['4', '★4 及以上'], ['5', '★5']].forEach(([v, l]) => { H(rateSel, 'option', '', l).value = v; }); rateSel.value = t.rating;
   const wl = H(bar, 'label', 'rpd-check'); const wcb = H(wl, 'input'); wcb.type = 'checkbox'; wcb.checked = t.watched; H(wl, 'span', '', '只看重点关注');
+  const ql = H(bar, 'label', 'rpd-check'); const qcb = H(ql, 'input'); qcb.type = 'checkbox'; qcb.checked = t.queued; H(ql, 'span', '', '只看阅读队列');
   const facetBox = H(c, 'div', 'rpd-facets');
   await loadQueue();
   const list = H(c, 'div');
   const query = () => {
     const qs = ['limit=' + LIB_PAGE, 'cursor=' + t.page * LIB_PAGE, 'facets=true', 'sort=' + t.sort];
-    if (t.q) qs.push('q=' + enc(t.q)); if (t.rating) qs.push('rating=' + t.rating); if (t.watched) qs.push('watched=true');
+    if (t.q) qs.push('q=' + enc(t.q)); if (t.rating) qs.push('rating=' + t.rating); if (t.watched) qs.push('watched=true'); if (t.queued) qs.push('queued=true');
     Object.entries(t.f).forEach(([k, v]) => { if (v) qs.push(k + '=' + enc(v)); });
     return '/papers?' + qs.join('&');
   };
@@ -993,10 +1009,10 @@ R.lib = async c => {
       values.slice(0, limit).forEach(v => chip(row, facetLabel(k, v.label) + ' ' + v.count, t.f[k] === v.label, () => { t.f[k] = t.f[k] === v.label ? '' : v.label; t.page = 0; fill(); }));
       if (values.length > 12) btn(row, t.open[k] ? '收起' : '更多 ' + (values.length - 12), 'rpd-link', () => { t.open[k] = !t.open[k]; fill(); });
     });
-    const active = Object.values(t.f).some(Boolean) || t.q || t.rating || t.watched;
+    const active = Object.values(t.f).some(Boolean) || t.q || t.rating || t.watched || t.queued;
     const from = data.total ? t.page * LIB_PAGE + 1 : 0, to = t.page * LIB_PAGE + data.items.length;
     const count = H(list, 'div', 'rpd-count'); count.setText('共 ' + data.total + ' 篇' + (data.total ? '，第 ' + from + '–' + to + ' 篇' : ''));
-    if (active) btn(count, '清除筛选', 'rpd-link', () => { t.f = {}; t.q = ''; t.rating = ''; t.watched = false; t.page = 0; render(); });
+    if (active) btn(count, '清除筛选', 'rpd-link', () => { t.f = {}; t.q = ''; t.rating = ''; t.watched = false; t.queued = false; t.page = 0; render(); });
     if (!data.items.length) empty(list, active ? '没有符合条件的论文。' : '论文库是空的。');
     const cards = H(list, 'div', 'rpd-cards');
     data.items.forEach(p => mount(cards, libCard, p));
@@ -1015,6 +1031,7 @@ R.lib = async c => {
   sortSel.addEventListener('change', () => { t.sort = sortSel.value; t.page = 0; fill(); });
   rateSel.addEventListener('change', () => { t.rating = rateSel.value; t.page = 0; fill(); });
   wcb.addEventListener('change', () => { t.watched = wcb.checked; t.page = 0; fill(); });
+  qcb.addEventListener('change', () => { t.queued = qcb.checked; t.page = 0; fill(); });
   await fill();
 };
 
@@ -1442,9 +1459,9 @@ async function recommendSettings(c) {
   check(g, '整理笔记里的要点，初筛时参考（回应了你关心的问题，没命中关键词也算核心；用了你存疑的思路，精选分打折）', s.notes.screening, v => ({ notes: { screening: v } }));
   text(g, '“关心什么”读这一节', s.notes.sections.relation, v => ({ notes: { sections: { relation: v } } }));
   text(g, '“想法和存疑”读这一节', s.notes.sections.ideas, v => ({ notes: { sections: { ideas: v } } }));
-  check(g, '精读过的论文当邻近推荐的种子（新论文引用了它就推出来）', s.notes.asSeeds, v => ({ notes: { asSeeds: v } }));
+  check(g, '精读过、打了高分的论文当邻近推荐的种子（新论文引用了它就推出来）', s.notes.asSeeds, v => ({ notes: { asSeeds: v } }));
   multi(g, '算“精读过”的状态', [['粗读', '粗读'], ['精读', '精读'], ['已读', '已读']], s.notes.seedStatuses, v => ({ notes: { seedStatuses: v } }));
-  number(g, '或者评分达到（0 表示不看评分）', s.notes.seedMinRating, 0, 5, v => ({ notes: { seedMinRating: v } }));
+  number(g, '或者面板上打的星达到（没写笔记也算；0 表示不看星）', s.notes.seedMinRating, 0, 5, v => ({ notes: { seedMinRating: v } }));
   check(g, '把这一节里的论文加进阅读队列（写链接或论文 ID；每篇只加一次）', s.notes.followToQueue, v => ({ notes: { followToQueue: v } }));
   text(g, '“要追的论文”读这一节', s.notes.sections.follow, v => ({ notes: { sections: { follow: v } } }));
   check(g, '从笔记里提候选关键词（在“我的研究领域”里采纳或忽略）', s.notes.candidates, v => ({ notes: { candidates: v } }));
