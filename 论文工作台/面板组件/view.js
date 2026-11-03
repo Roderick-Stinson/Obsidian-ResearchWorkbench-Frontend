@@ -408,10 +408,15 @@ async function uploadPdf(paperId, file) {
   return act(() => http('PUT', '/papers/' + enc(paperId) + '/pdf', { body: content, raw: true }), '已上传 PDF');
 }
 // 添加论文：mark 是 own / watched 时同时标为本人论文 / 关注论文，不给就只加进论文库。给了 arXiv / OpenReview 链接的，标题可以不填，后端在后台补全信息、下载 PDF。
+// 会议和发表状态可以不填：不是本人论文的，后端会到 Semantic Scholar 查正式出版记录补上；填了的以你填的为准。
 function addPaperForm(parent, mark) {
   const form = H(parent, 'div', 'rpd-kw-form');
   const url = H(form, 'input', 'rpd-input'); url.placeholder = mark ? 'arXiv / OpenReview 链接（已在论文库里的会直接加上标记）' : 'arXiv / OpenReview 链接（已在论文库里的不会重复添加）';
   const title = H(form, 'input', 'rpd-input'); title.placeholder = mark === 'own' ? '论文标题（有 arXiv 链接时可不填；没有链接的稿子必填）' : '论文标题（有 arXiv 链接时可不填）';
+  const pub = H(form, 'div', 'rpd-tools');
+  const venue = H(pub, 'input', 'rpd-input'); venue.placeholder = mark === 'own' ? '会议 / 期刊（可选），例如 AAAI 2027 投稿' : '会议 / 期刊（可选，不填就自动查），例如 ICLR 2025';
+  const status = H(pub, 'select', 'rpd-select'); status.setAttribute('aria-label', '发表状态');
+  [['', mark === 'own' ? '发表状态：投稿中' : '发表状态：自动查'], ...PUB_STATUS.map(v => [v, v])].forEach(([v, l]) => { H(status, 'option', '', l).value = v; });
   const bar = H(form, 'div', 'rpd-tools'); let file = null;
   const fileLabel = H(bar, 'span', 'rpd-muted', '未选 PDF');
   btn(bar, '选择 PDF', '', async () => { file = await pickPdf(); fileLabel.setText(file ? file.name : '未选 PDF'); });
@@ -419,7 +424,8 @@ function addPaperForm(parent, mark) {
     const link = url.value.trim(), name = title.value.trim();
     if (!link && !name) return toast('请填写链接或标题');
     const body = mark ? { [mark]: true } : {}; if (link) body.url = link; if (name) body.title = name;
-    const paper = await act(() => http('POST', '/papers', { body }), link && !file ? '已添加，后台正在补全信息、下载 PDF，稍后刷新' : '已添加');
+    if (venue.value.trim()) body.venue = venue.value.trim(); if (status.value) body.publicationStatus = status.value;
+    const paper = await act(() => http('POST', '/papers', { body }), link && !file ? '已添加，后台正在补全信息、下载 PDF，稍后刷新' : mark !== 'own' && !body.venue ? '已添加，后台正在查会议，稍后刷新' : '已添加');
     if (!paper) return;
     if (file) await uploadPdf(paper.id, file);
     render();
