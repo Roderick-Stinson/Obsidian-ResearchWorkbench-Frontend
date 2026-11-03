@@ -27,9 +27,10 @@
 
 **在阅读笔记里贴论文的图（可选，推荐）**
 
-三个第三方插件配合着用：每篇笔记的图放在它自己的文件夹里，粘贴时起名，没人引用的图定期清掉。
+四个第三方插件配合着用：每篇笔记的图放在它自己的文件夹里，粘贴时起名，没人引用的图定期清掉。
 
 - [Custom Attachment Location](https://github.com/mnaoumov/obsidian-custom-attachment-location)：决定图放在哪。下面的设置名以 17.x 版为准。
+  - **17.x 版要同时装上并启用 [Advanced Rename and Delete Handler](https://github.com/mnaoumov/obsidian-advanced-rename-and-delete-handler)**（同一个作者），否则它什么都不做：不报错，图照样落在 vault 根目录。
   - 关掉「Follow Obsidian attachment location」，否则图还是落在 vault 根目录。
   - 「Location for new attachments」填 `./assets/{{noteFileName}}`，图就放在笔记旁边的 `assets/<笔记名>/` 里；笔记改名或移动时文件夹跟着走。
   - 「生成的附件文件名」填 `Pasted image {{date:{momentJsFormat:'YYYYMMDDHHmmss'}}}`（`image` 后面有个空格）。
