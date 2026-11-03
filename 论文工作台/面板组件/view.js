@@ -407,10 +407,10 @@ async function uploadPdf(paperId, file) {
   const content = await file.arrayBuffer();
   return act(() => http('PUT', '/papers/' + enc(paperId) + '/pdf', { body: content, raw: true }), '已上传 PDF');
 }
-// 添加论文：本人论文或关注论文。给了 arXiv / OpenReview 链接的，标题可以不填，后端在后台补全信息、下载 PDF。
+// 添加论文：mark 是 own / watched 时同时标为本人论文 / 关注论文，不给就只加进论文库。给了 arXiv / OpenReview 链接的，标题可以不填，后端在后台补全信息、下载 PDF。
 function addPaperForm(parent, mark) {
   const form = H(parent, 'div', 'rpd-kw-form');
-  const url = H(form, 'input', 'rpd-input'); url.placeholder = 'arXiv / OpenReview 链接（已在论文库里的会直接加上标记）';
+  const url = H(form, 'input', 'rpd-input'); url.placeholder = mark ? 'arXiv / OpenReview 链接（已在论文库里的会直接加上标记）' : 'arXiv / OpenReview 链接（已在论文库里的不会重复添加）';
   const title = H(form, 'input', 'rpd-input'); title.placeholder = mark === 'own' ? '论文标题（有 arXiv 链接时可不填；没有链接的稿子必填）' : '论文标题（有 arXiv 链接时可不填）';
   const bar = H(form, 'div', 'rpd-tools'); let file = null;
   const fileLabel = H(bar, 'span', 'rpd-muted', '未选 PDF');
@@ -418,7 +418,7 @@ function addPaperForm(parent, mark) {
   btn(bar, '添加', 'rpd-primary', async () => {
     const link = url.value.trim(), name = title.value.trim();
     if (!link && !name) return toast('请填写链接或标题');
-    const body = { [mark]: true }; if (link) body.url = link; if (name) body.title = name;
+    const body = mark ? { [mark]: true } : {}; if (link) body.url = link; if (name) body.title = name;
     const paper = await act(() => http('POST', '/papers', { body }), link && !file ? '已添加，后台正在补全信息、下载 PDF，稍后刷新' : '已添加');
     if (!paper) return;
     if (file) await uploadPdf(paper.id, file);
@@ -986,6 +986,8 @@ R.lib = async c => {
   [['', '我的评价：全部'], ['unrated', '未评价'], ['3', '★3 及以上'], ['4', '★4 及以上'], ['5', '★5']].forEach(([v, l]) => { H(rateSel, 'option', '', l).value = v; }); rateSel.value = t.rating;
   const wl = H(bar, 'label', 'rpd-check'); const wcb = H(wl, 'input'); wcb.type = 'checkbox'; wcb.checked = t.watched; H(wl, 'span', '', '只看重点关注');
   const ql = H(bar, 'label', 'rpd-check'); const qcb = H(ql, 'input'); qcb.type = 'checkbox'; qcb.checked = t.queued; H(ql, 'span', '', '只看阅读队列');
+  btn(bar, '添加论文', 'rpd-primary', () => addPaperForm(formSlot));
+  const formSlot = H(c, 'div');
   const facetBox = H(c, 'div', 'rpd-facets');
   await loadQueue();
   const list = H(c, 'div');
