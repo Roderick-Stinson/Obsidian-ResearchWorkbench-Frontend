@@ -358,7 +358,7 @@ function noteButton(bar, paper) {
   if (note) btn(bar, '阅读笔记', 'rpd-ghost', () => open(note.path)); else btn(bar, '建阅读笔记', 'rpd-ghost', () => createPaperNote(paper));
 }
 // 笔记的阅读状态只有这四个（单选）。在面板上选了写回笔记的 frontmatter，马上同步给后端（阅读队列里读过的会移出）。
-const NOTE_STATUSES = ['待读', '粗读', '精读', '已读'];
+const NOTE_STATUSES = ['待读', '粗读', '精读'];
 function statusPicker(bar, paper, redraw) {
   const note = noteFor(paper.id); if (!note) return;
   const cur = note.status === '未分类' ? '' : note.status;
@@ -452,16 +452,18 @@ const T = {
 // ---------- 各页签（都是异步的：先取数据再画） ----------
 const R = {};
 R.home = async c => {
-  const [overview, brief, pipeline, jobs] = await Promise.all([get('/overview'), get('/brief'), get('/pipeline'), get('/jobs'), loadQueue()]);
+  const [overview, brief, pipeline, jobs, facets] = await Promise.all([get('/overview'), get('/brief'), get('/pipeline'), get('/jobs'), get('/papers?facets=true&limit=1'), loadQueue()]);
   const head = H(c, 'div', 'rpd-home-heading'); const left = H(head, 'div'); H(left, 'h2', 'rpd-issue-h', '研究总览');
   H(left, 'p', 'rpd-muted', brief.data ? '简报更新于 ' + fmtTime(brief.data.updatedAt) : '等待后端生成每日简报');
   btn(head, '刷新', '', () => render());
   const b = brief.data, o = overview.data;
   if (b && b.date !== ymd(new Date())) H(c, 'p', 'rpd-warn', '以下是 ' + b.date + ' 的简报；“今日”指该日期。');
-  const localRead = notes.filter(n => n.status === '已读').length;
-  const rate = notes.length ? (localRead / notes.length * 100).toFixed(1) + '%' : '—';
+  // 和论文库的“读没读过”同一套算法（后端按笔记状态和评分算），进度 = 读过（精读 + 粗读）÷ 论文库总数。
+  const rd = Object.fromEntries((facets.data?.facets?.reading || []).map(f => [f.label, f.count]));
+  const deep = rd['精读'] || 0, skimmed = rd['粗读'] || 0, total = deep + skimmed + (rd['未读'] || 0);
+  const rate = total ? ((deep + skimmed) / total * 100).toFixed(1) + '%' : '—';
   const stats = H(c, 'div', 'rpd-stats rpd-home-stats');
-  [['论文库总数', num(o?.paperTotal), '后端论文库'], ['与我相关', num(o?.relevantTotal), '检索判定为核心相关或相关'], ['今日新收录', num(b?.newCount), b ? b.date : '—'], ['今日精选', num(b?.pickedCount), b ? b.date : '—'], ['已读笔记', localRead, '本地阅读笔记'], ['阅读进度', rate, '按本地笔记计算']]
+  [['论文库总数', num(o?.paperTotal), '后端论文库'], ['与我相关', num(o?.relevantTotal), '检索判定为核心相关或相关'], ['今日新收录', num(b?.newCount), b ? b.date : '—'], ['今日精选', num(b?.pickedCount), b ? b.date : '—'], ['精读', deep, '粗读 ' + skimmed + ' 篇'], ['阅读进度', rate, '精读 + 粗读 ' + (deep + skimmed) + ' / 论文库 ' + total]]
     .forEach(([name, value, hint]) => { const box = H(stats, 'div', 'rpd-stat'); H(box, 'span', 'rpd-stat-l', name); H(box, 'span', 'rpd-stat-n', value); H(box, 'span', 'rpd-stat-hint', hint); });
 
   const daily = H(c, 'section', 'rpd-overview-panel'); H(H(daily, 'div', 'rpd-panel-head'), 'h3', '', '每日研究简报');
@@ -925,12 +927,12 @@ R.watched = async c => {
 const RELEVANCE = { core: '核心相关', related: '相关', none: '未判定' };
 const LIB_SORTS = [['relevance', '核心相关优先'], ['newest', '最新'], ['citations', '被引最多'], ['rating', '我的评价'], ['added', '最近加入']];
 const LIB_FACETS = [['reading', '读没读过'], ['status', '发表状态'], ['topic', '方向'], ['venue', '会议 / 期刊'], ['year', '年份'], ['relevance', '相关程度']];
-// 读没读过，和后端的算法一致：笔记是精读 / 已读的算已读，笔记是粗读或打过分的算粗读，其余算未读。
+// 读没读过，和后端的算法一致：笔记是精读的算精读（旧笔记里的“已读”也算），笔记是粗读或打过分的算粗读，其余算未读。
 // 不单独存，每次按评分和笔记现算；笔记的 status 用 vault 里最新的（后端的要等下次同步）。返回 [状态, 为什么]。
 function readingOf(p) {
   const status = noteFor(p.id)?.status ?? p.noteStatus;
   const why = status ? '笔记 status：' + status : '还没有阅读笔记';
-  if (['精读', '已读'].includes(status)) return ['已读', why];
+  if (['精读', '已读'].includes(status)) return ['精读', why];
   if (status === '粗读') return ['粗读', why];
   if (p.user.rating) return ['粗读', '打过分（' + p.user.rating + ' 星）算粗读；' + why];
   return ['未读', why];
@@ -947,7 +949,7 @@ function libCard(el, p, redraw) {
   const head = H(el, 'div', 'rpd-card-head');
   const title = H(head, 'h3', 'rpd-card-title', paperTitle(p));
   const [reading, why] = readingOf(p);  // 只显示一个阅读状态，紧跟在标题后面；为什么是这个状态放在悬停提示里
-  if (reading !== '未读' || noteFor(p.id)) H(title, 'span', 'rpd-read ' + ({ 已读: 'is-done', 粗读: 'is-skim' }[reading] || 'is-unread'), reading).title = why;
+  if (reading !== '未读' || noteFor(p.id)) H(title, 'span', 'rpd-read ' + ({ 精读: 'is-done', 粗读: 'is-skim' }[reading] || 'is-unread'), reading).title = why;
   if (p.libraryRelevance) H(head, 'span', 'rpd-quality' + (p.libraryRelevance === 'core' ? '' : ' is-soft'), RELEVANCE[p.libraryRelevance]);
   zhLine(el, p);
   if (!titleKnown(p)) titleTools(H(el, 'div', 'rpd-tools'), p, redraw);
@@ -1468,7 +1470,7 @@ async function recommendSettings(c) {
   text(g, '“关心什么”读这一节', s.notes.sections.relation, v => ({ notes: { sections: { relation: v } } }));
   text(g, '“想法和存疑”读这一节', s.notes.sections.ideas, v => ({ notes: { sections: { ideas: v } } }));
   check(g, '精读过、打了高分的论文当邻近推荐的种子（新论文引用了它就推出来）', s.notes.asSeeds, v => ({ notes: { asSeeds: v } }));
-  multi(g, '算“精读过”的状态', [['粗读', '粗读'], ['精读', '精读'], ['已读', '已读']], s.notes.seedStatuses, v => ({ notes: { seedStatuses: v } }));
+  multi(g, '算“精读过”的状态', [['粗读', '粗读'], ['精读', '精读']], s.notes.seedStatuses, v => ({ notes: { seedStatuses: v } }));
   number(g, '或者面板上打的星达到（没写笔记也算；0 表示不看星）', s.notes.seedMinRating, 0, 5, v => ({ notes: { seedMinRating: v } }));
   check(g, '把这一节里的论文加进阅读队列（写链接或论文 ID；每篇只加一次）', s.notes.followToQueue, v => ({ notes: { followToQueue: v } }));
   text(g, '“要追的论文”读这一节', s.notes.sections.follow, v => ({ notes: { sections: { follow: v } } }));
