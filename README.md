@@ -14,6 +14,11 @@
    ```bash
    cd ~/PaperWorkbench && .venv/bin/python -m pwb serve
    ```
+   不想每次手动启动的话，装成登录自启的服务（先 `Ctrl-C` 停掉手动开的那个）：
+   ```bash
+   cd ~/PaperWorkbench && .venv/bin/python -m pwb service install
+   ```
+   装好后登录就自动启动、退出了自动拉起，日志在 `~/PaperWorkbench/data/serve.log`。卸载用 `service uninstall`，查看用 `service status`，更多说明见后端 README 的「开机自启」。
 4. 打开 `论文面板.md`，切到阅读视图。右上角显示“后端已连接”就可以用了。`我的研究领域.md` 是关键词树的编辑页：先在这里“添加一级领域”，再到“关注论文”页贴几篇代表论文的 arXiv 链接。
 5. 后端地址默认是 `http://127.0.0.1:8765/api/v1`。要改地址或设置 token，在面板“设置 → 后端连接”里改，会保存到 `面板组件/config.json`（这个文件不要提交，里面可能有 token）。
 
