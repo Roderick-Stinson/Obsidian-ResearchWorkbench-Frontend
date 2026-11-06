@@ -95,20 +95,36 @@ function shown(c, res, what) {
 async function act(fn, ok) { try { const r = await fn(); if (ok) toast(ok); return r; } catch (e) { toast(errorText(e)); return null; } }
 
 // ---------- 后台任务（按钮 → 后端执行，约定第 6 节） ----------
-async function startTask(type, params, label) {
+// opts.paper：这是“一键生成精读笔记”——任务完成后自动用生成的精读建笔记并打开。
+// 进行中的任务记在 window 上：Dataview 重新运行脚本（vault 里任何笔记变了都会）时，新的面板接着等，不会丢。
+window.__rpdJobs = window.__rpdJobs || {};
+async function startTask(type, params, label, opts = {}) {
   const key = globalThis.crypto?.randomUUID?.() || String(Date.now()) + Math.random();
   const task = await act(() => http('POST', '/tasks', { body: { type, params }, headers: { 'Idempotency-Key': key } }));
   if (!task) return;
   toast('已提交：' + label);
+  watchTask(task.id, label, opts);
+}
+function watchTask(taskId, label, opts = {}) {
+  window.__rpdJobs[taskId] = { label, opts };
+  let lastMsg = '';
   const poll = async () => {
-    if (disposed) return;
-    let t; try { t = await http('GET', '/tasks/' + enc(task.id)); } catch (e) { return setTimeout(poll, 5000); }
-    if (t.status === 'done') { toast(label + ' 完成' + (t.message ? '：' + t.message : '')); render(); }
-    else if (t.status === 'failed') toast(label + ' 失败：' + (t.error || '未知原因'));
-    else setTimeout(poll, 3000);
+    if (disposed) return;  // 新的面板实例会从 window.__rpdJobs 接着等
+    let t; try { t = await http('GET', '/tasks/' + enc(taskId)); } catch (e) { return setTimeout(poll, 5000); }
+    if (t.status === 'done') {
+      delete window.__rpdJobs[taskId];
+      if (opts.paper) { toast(label + ' 完成，正在建笔记'); await finishOneClick(opts.paper); }
+      else { toast(label + ' 完成' + (t.message ? '：' + t.message : '')); render(); }
+    } else if (t.status === 'failed') { delete window.__rpdJobs[taskId]; toast(label + ' 失败：' + (t.error || '未知原因')); }
+    else {
+      const msg = t.progress?.message || '';
+      if (msg && msg !== lastMsg) { lastMsg = msg; toast(label + '：' + msg); }
+      setTimeout(poll, 3000);
+    }
   };
   setTimeout(poll, 1500);
 }
+function resumeJobs() { Object.entries(window.__rpdJobs).forEach(([id, j]) => watchTask(id, j.label, j.opts)); }
 
 // 后端目前能执行的任务（/health 的 taskTypes）。还没实现的按钮显示成“即将上线”、点不了，免得点了才知道不行。
 let TASK_TYPES = null;
@@ -354,7 +370,25 @@ async function createPaperNote(paper, body) {
 }
 function noteButton(bar, paper) {
   const note = noteFor(paper.id);
-  if (note) btn(bar, '阅读笔记', 'rpd-ghost', () => open(note.path)); else btn(bar, '建阅读笔记', 'rpd-ghost', () => createPaperNote(paper));
+  if (note) { btn(bar, '阅读笔记', 'rpd-ghost', () => open(note.path)); return; }
+  btn(bar, '建阅读笔记', 'rpd-ghost', () => createPaperNote(paper));
+  taskBtn(bar, '一键生成精读笔记', 'rpd-ghost', 'deep-read', () => oneClickNote(paper));
+}
+// 一键生成精读笔记：后端读 PDF 全文、按模板写粗读和精读（几分钟），生成完自动建笔记并打开。已经生成过的直接用，不重新生成。
+// 笔记的 status 保持“待读”：AI 写的不算你读过，对照原文核实后你自己改成粗读 / 精读。
+async function oneClickNote(paper) {
+  await loadNotes();
+  const existing = noteFor(paper.id);
+  if (existing) { open(existing.path); return; }
+  if (Object.values(window.__rpdJobs).some(j => j.opts?.paper?.id === paper.id)) return toast('这篇正在生成精读，稍等一会儿');
+  let d = null;
+  try { d = await http('GET', '/papers/' + enc(paper.id) + '/deep-read'); } catch (e) { if (e.status !== 404) return toast(errorText(e)); }
+  if (d) return createPaperNote(paper, d.markdown);
+  await startTask('deep-read', { paperId: paper.id }, '精读《' + String(paper.title || paper.id).slice(0, 24) + '》', { paper: { id: paper.id, title: paper.title } });
+}
+async function finishOneClick(paper) {
+  let d; try { d = await http('GET', '/papers/' + enc(paper.id) + '/deep-read'); } catch (e) { return toast('取不到生成的精读：' + errorText(e)); }
+  await createPaperNote(paper, d.markdown);
 }
 // 笔记的阅读状态只有这四个（单选）。在面板上选了写回笔记的 frontmatter，马上同步给后端（阅读队列里读过的会移出）。
 const NOTE_STATUSES = ['待读', '粗读', '精读'];
@@ -1624,6 +1658,7 @@ async function render() {
 await Promise.all([loadNotes(), loadExperiments()]);
 try { const h = await http('GET', '/health'); TASK_TYPES = h.taskTypes || null; TZ_NAME = h.timezone || undefined; } catch (e) {}
 render();
+resumeJobs();
 resolveNoteIds().then(() => syncNotes());
 
 // 笔记或实验记录变化时，只重画依赖它们的页签（防抖，避免边打字边刷新）。
