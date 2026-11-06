@@ -1,7 +1,6 @@
 // 论文工作台 · 单面板。数据来自后端接口（约定见 论文工作台/后端约定/数据格式约定.md）；vault 里只读写阅读笔记和面板配置。
 const DIR = input?.componentDir || [dv.current().file.folder, '面板组件'].filter(Boolean).join('/');
 const CONFIG_FILE = DIR + '/config.json';
-const RESEARCH_PAGE = [dv.current().file.folder, '我的研究领域.md'].filter(Boolean).join('/');
 const root = dv.container.createDiv({ cls: 'rpd-root' });
 let disposed = false;
 
@@ -435,7 +434,11 @@ function addPaperForm(parent, mark) {
 }
 
 // ---------- 页签状态 ----------
-let tab = input?.page === 'research' ? 'research' : 'home';
+// Dataview 在 vault 里任何笔记变了（Dropbox 同步、笔记同步写回等）都会重新运行整段脚本，页签状态会丢；
+// 所以把当前页签记在 window 上（按笔记路径分开），重新运行时接着用，不会被弹回起始页签。
+const TAB_KEY = dv.current().file.path;
+window.__rpdTab = window.__rpdTab || {};
+let tab = window.__rpdTab[TAB_KEY] || (input?.page === 'research' ? 'research' : 'home');
 const T = {
   issue: { date: null, q: '', domain: undefined },
   watched: { q: '', status: '全部' },
@@ -1568,8 +1571,10 @@ R.set = async c => {
       btn(adv, '保存', 'rpd-primary', () => save(() => http('PUT', '/settings/llm', { body: body(key.value.trim() ? { apiKey: key.value.trim() } : {}) }), '已保存 ' + e.name + ' 的设置'));
       if (e.keySet) btn(adv, '清除 key', 'rpd-ghost', () => save(() => http('PUT', '/settings/llm', { body: body({ apiKey: '' }) }), '已清除 key'));
       radio.addEventListener('change', () => save(() => http('PUT', '/settings/llm', { body: body({ select: true }) }), '已切换到 ' + e.name));
-      [model, effort].forEach(el => el && el.addEventListener('change', () => { if (el === model && model.value === MANUAL) return; if (cfg.engine === e.key) save(() => http('PUT', '/settings/llm', { body: body() }), '已保存'); }));
-      typed.addEventListener('change', () => { if (cfg.engine === e.key) save(() => http('PUT', '/settings/llm', { body: body() }), '已保存模型'); });
+      // 改模型 / 思考强度：就地保存，不重画整页（重画会跳回页首，选模型时看着像“页面自己刷新了”）。
+      const saveInPlace = ok => { if (cfg.engine === e.key) act(() => http('PUT', '/settings/llm', { body: body() }), ok); };
+      [model, effort].forEach(el => el && el.addEventListener('change', () => { if (el === model && model.value === MANUAL) return; saveInPlace('已保存'); }));
+      typed.addEventListener('change', () => saveInPlace('已保存模型'));
       if (cfg.engine === e.key) loadModels();
     });
     H(engineSec, 'p', 'rpd-muted', '接口地址和 key 配在这里，只给后端用，和你日常的 Claude Code / Codex 配置互不影响：Codex 走 /v1/responses，后端自己生成一份配置；Claude Code 配了 key 后用后端自己的配置目录。key 存在后端 data/secrets.json，面板读不回来。');
@@ -1597,17 +1602,24 @@ const nav = H(root, 'nav', 'rpd-nav');
 const NAV = [['home', '首页'], ['experiments', '实验记录'], ['issue', '论文推荐'], ['watched', '关注论文'], ['teams', '团队'], ['lib', '论文库'], ['schemes', '分类'], ['must', '经典与必读'], ['map', '领域发展史'], ['hot', '热点'], ['res', '结果表'], ['idea', 'IDEA'], ['research', '我的研究领域'], ['rep', '报告'], ['inbox', '待认领'], ['set', '设置']];
 const content = H(root, 'main', 'rpd-content');
 toastEl = document.body.createDiv({ cls: 'rpd-toast' });
-function goTab(next) { tab = next; render(); }
-let renderSeq = 0;
+function goTab(next) { tab = next; window.__rpdTab[TAB_KEY] = next; render(); }
+let renderSeq = 0, renderedTab = null;
+// 页面滚动的那一层（Obsidian 的阅读视图），重画页面前后记住、恢复滚动位置；
+// Dataview 重新运行整段脚本时（新实例）也接着上次的位置，不会弹回页首。
+function scroller() { for (let el = root.parentElement; el; el = el.parentElement) { if (el.scrollHeight > el.clientHeight && /(auto|scroll)/.test(getComputedStyle(el).overflowY)) return el; } return null; }
+window.__rpdScroll = window.__rpdScroll || {};
 async function render() {
   const seq = ++renderSeq;
+  const sp = scroller(), keepTop = sp && renderedTab === tab ? sp.scrollTop : (window.__rpdScroll[TAB_KEY]?.tab === tab && renderedTab === null ? window.__rpdScroll[TAB_KEY].top : 0);
   titleEl.setText(tab === 'research' ? '我的研究领域' : '实验工作台 · 论文');
-  nav.empty(); NAV.forEach(([k, l]) => { const b = H(nav, 'button', 'rpd-navbtn' + (tab === k ? ' is-active' : ''), l); b.type = 'button'; b.addEventListener('click', () => { if (k === 'research' && dv.current().file.path !== RESEARCH_PAGE) { open(RESEARCH_PAGE); return; } goTab(k); }); });
+  nav.empty(); NAV.forEach(([k, l]) => { const b = H(nav, 'button', 'rpd-navbtn' + (tab === k ? ' is-active' : ''), l); b.type = 'button'; b.addEventListener('click', () => goTab(k)); });
   const next = createDiv({ cls: 'rpd-page' });
   const loading = content.childElementCount ? null : H(content, 'p', 'rpd-muted', '加载中…');
   try { await R[tab](next); } catch (e) { empty(next, '页面出错：' + e.message); console.error(e); }
   if (seq !== renderSeq || disposed) return;
   loading?.remove(); content.empty(); content.appendChild(next); updateStatus();
+  renderedTab = tab;
+  const sp2 = scroller(); if (sp2) { sp2.scrollTop = keepTop; if (!sp2.__rpdBound) { sp2.__rpdBound = true; sp2.addEventListener('scroll', () => { window.__rpdScroll[TAB_KEY] = { tab, top: sp2.scrollTop }; }, { passive: true }); } }
 }
 await Promise.all([loadNotes(), loadExperiments()]);
 try { const h = await http('GET', '/health'); TASK_TYPES = h.taskTypes || null; TZ_NAME = h.timezone || undefined; } catch (e) {}
