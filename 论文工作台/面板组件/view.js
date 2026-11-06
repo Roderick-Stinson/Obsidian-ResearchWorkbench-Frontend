@@ -478,7 +478,7 @@ const T = {
   watched: { q: '', status: '全部' },
   teams: { q: '' },
   schemes: { id: null, cat: undefined, form: null, suggestScope: { kind: 'topic', value: '' } },
-  lib: { q: '', sort: 'relevance', rating: '', watched: false, queued: false, f: {}, open: {}, page: 0 },
+  lib: { q: '', author: '', sort: 'relevance', rating: '', watched: false, queued: false, f: {}, open: {}, page: 0 },
   must: { tier: '全部', period: '全部' },
   map: { sec: '发展史', stream: null },
   res: { cat: null, full: false, abl: false, view: '效果' },
@@ -996,7 +996,12 @@ function libCard(el, p, redraw) {
   if (p.publicationStatus !== '已发表') H(meta, 'span', 'rpd-tag warn', p.publicationStatus === '待核实' ? '会议待核实' : p.publicationStatus);
   const src = p.urls?.source || sourceUrl(p.id);
   if (src) extLink(meta, src, sourceLabel(p));
-  if (p.firstAuthor) H(meta, 'span', '', p.firstAuthor + (p.year ? ' · ' + p.year : ''));
+  if (p.firstAuthor) {
+    // 点第一作者的名字：按这位作者搜论文库里他的全部论文（包括作为合作者的）
+    const a = H(meta, 'a', 'rpd-link', p.firstAuthor); a.title = '搜这位作者的论文'; a.href = '#';
+    a.addEventListener('click', e => { e.preventDefault(); T.lib.author = p.firstAuthor; T.lib.page = 0; if (tab === 'lib') render(); else goTab('lib'); });
+    if (p.year) H(meta, 'span', '', '· ' + p.year);
+  }
   if (p.institutions?.length) H(meta, 'span', 'rpd-inst', p.institutions.join(' · '));
   btn(meta, '作者与机构', 'rpd-link', () => authorsBox(el, p.id));
   if (p.citations?.count != null) H(meta, 'span', '', '被引 ' + p.citations.count);
@@ -1024,7 +1029,9 @@ R.lib = async c => {
   H(c, 'h2', 'rpd-issue-h', '论文库');
   const intro = H(c, 'p', 'rpd-muted', '收录判断是否属于你的研究方向（核心相关 / 相关），每篇都有 AI 生成的中文标题和一句话总结，以原文为准。');
   const bar = H(c, 'div', 'rpd-tools rpd-lib-toolbar');
-  const search = H(bar, 'input', 'rpd-search rpd-lib-search'); search.type = 'search'; search.placeholder = '搜标题、摘要、速读、作者'; search.value = t.q;
+  const search = H(bar, 'input', 'rpd-search rpd-lib-search'); search.type = 'search'; search.placeholder = '搜主题：标题、摘要、速读'; search.value = t.q;
+  // 按作者搜：只看作者名（不看标题和摘要），几个词要落在同一位作者身上，不分大小写和重音；可以和上面的主题搜索叠加。
+  const authorSearch = H(bar, 'input', 'rpd-search rpd-lib-search'); authorSearch.type = 'search'; authorSearch.placeholder = '按作者搜，如 Guibin Zhang'; authorSearch.value = t.author;
   const sortSel = H(bar, 'select', 'rpd-select'); sortSel.setAttribute('aria-label', '排序');
   LIB_SORTS.forEach(([v, l]) => { H(sortSel, 'option', '', l).value = v; }); sortSel.value = t.sort;
   const rateSel = H(bar, 'select', 'rpd-select'); rateSel.setAttribute('aria-label', '我的评价');
@@ -1038,7 +1045,7 @@ R.lib = async c => {
   const list = H(c, 'div');
   const query = () => {
     const qs = ['limit=' + LIB_PAGE, 'cursor=' + t.page * LIB_PAGE, 'facets=true', 'sort=' + t.sort];
-    if (t.q) qs.push('q=' + enc(t.q)); if (t.rating) qs.push('rating=' + t.rating); if (t.watched) qs.push('watched=true'); if (t.queued) qs.push('queued=true');
+    if (t.q) qs.push('q=' + enc(t.q)); if (t.author) qs.push('author=' + enc(t.author)); if (t.rating) qs.push('rating=' + t.rating); if (t.watched) qs.push('watched=true'); if (t.queued) qs.push('queued=true');
     Object.entries(t.f).forEach(([k, v]) => { if (v) qs.push(k + '=' + enc(v)); });
     return '/papers?' + qs.join('&');
   };
@@ -1056,10 +1063,10 @@ R.lib = async c => {
       values.slice(0, limit).forEach(v => chip(row, facetLabel(k, v.label) + ' ' + v.count, t.f[k] === v.label, () => { t.f[k] = t.f[k] === v.label ? '' : v.label; t.page = 0; fill(); }));
       if (values.length > 12) btn(row, t.open[k] ? '收起' : '更多 ' + (values.length - 12), 'rpd-link', () => { t.open[k] = !t.open[k]; fill(); });
     });
-    const active = Object.values(t.f).some(Boolean) || t.q || t.rating || t.watched || t.queued;
+    const active = Object.values(t.f).some(Boolean) || t.q || t.author || t.rating || t.watched || t.queued;
     const from = data.total ? t.page * LIB_PAGE + 1 : 0, to = t.page * LIB_PAGE + data.items.length;
     const count = H(list, 'div', 'rpd-count'); count.setText('共 ' + data.total + ' 篇' + (data.total ? '，第 ' + from + '–' + to + ' 篇' : ''));
-    if (active) btn(count, '清除筛选', 'rpd-link', () => { t.f = {}; t.q = ''; t.rating = ''; t.watched = false; t.queued = false; t.page = 0; render(); });
+    if (active) btn(count, '清除筛选', 'rpd-link', () => { t.f = {}; t.q = ''; t.author = ''; t.rating = ''; t.watched = false; t.queued = false; t.page = 0; render(); });
     if (!data.items.length) empty(list, active ? '没有符合条件的论文。' : '论文库是空的。');
     const cards = H(list, 'div', 'rpd-cards');
     data.items.forEach(p => mount(cards, libCard, p));
@@ -1075,6 +1082,7 @@ R.lib = async c => {
   }
   let timer;
   search.addEventListener('input', () => { t.q = search.value.trim(); t.page = 0; clearTimeout(timer); timer = setTimeout(fill, 300); });
+  authorSearch.addEventListener('input', () => { t.author = authorSearch.value.trim(); t.page = 0; clearTimeout(timer); timer = setTimeout(fill, 300); });
   sortSel.addEventListener('change', () => { t.sort = sortSel.value; t.page = 0; fill(); });
   rateSel.addEventListener('change', () => { t.rating = rateSel.value; t.page = 0; fill(); });
   wcb.addEventListener('change', () => { t.watched = wcb.checked; t.page = 0; fill(); });
