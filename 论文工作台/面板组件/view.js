@@ -1518,12 +1518,61 @@ R.set = async c => {
       const lab = H(row, 'label', 'rpd-check'); const radio = H(lab, 'input'); radio.type = 'radio'; radio.name = 'rpd-engine'; radio.checked = cfg.engine === e.key; radio.disabled = !e.ready; H(lab, 'strong', '', e.name);
       H(row, 'span', 'rpd-tag ' + (e.ready ? 'good' : 'warn'), e.ready ? '可用' : '不可用');
       H(row, 'span', 'rpd-muted', e.detail);
-      const model = H(row, 'input', 'rpd-input rpd-input-inline'); model.placeholder = e.defaultModel ? '模型，默认 ' + e.defaultModel : '模型（留空用该工具的默认模型）'; model.value = e.model && e.model !== e.defaultModel ? e.model : '';
-      const saveEngine = () => save(() => http('PUT', '/settings/llm', { body: { engine: e.key, model: model.value.trim() || null } }), '已切换到 ' + e.name);
-      radio.addEventListener('change', saveEngine);
-      model.addEventListener('change', () => { if (cfg.engine === e.key) saveEngine(); });
+      // 模型：下拉里选，“拉取模型”向这个引擎的接口要可用模型列表（当前引擎打开页面时自动拉一次）；拉不到或列表里没有，选“手动输入”自己填。
+      const MANUAL = '__manual__';
+      const current = e.model && e.model !== e.defaultModel ? e.model : '';
+      const model = H(row, 'select', 'rpd-select'); model.setAttribute('aria-label', e.name + ' 的模型');
+      const typed = H(row, 'input', 'rpd-input rpd-input-inline'); typed.placeholder = '模型名'; typed.hidden = true;
+      const modelValue = () => model.value === MANUAL ? typed.value.trim() : model.value;
+      let known = {};  // 模型 ID → {label, efforts}，来自“拉取模型”；思考强度的选项跟着所选模型走
+      const fillModels = (items, hint) => {
+        known = Object.fromEntries(items.map(m => [m.id, m]));
+        model.empty();
+        H(model, 'option', '', e.defaultModel ? '模型：默认 ' + e.defaultModel : '模型：默认（该工具自己的）').value = '';
+        const all = [...new Set([...(current ? [current] : []), ...items.map(m => m.id)])];
+        all.forEach(id => { const m = known[id]; H(model, 'option', '', m && m.label && m.label !== id ? m.label + ' · ' + id : id).value = id; });
+        H(model, 'option', '', '手动输入…').value = MANUAL;
+        model.value = current || '';
+        if (hint) modelHint.setText(hint);
+      };
+      const modelHint = H(row, 'span', 'rpd-muted', '');
+      const loadModels = async () => {
+        modelHint.setText('正在拉取…');
+        const r = await get('/settings/llm/models?engine=' + e.key);
+        if (!r.data) { fillModels([], r.error?.message || '拉取失败'); return; }
+        fillModels(r.data.items, r.data.message || ('共 ' + r.data.items.length + ' 个模型'));
+        fillEfforts();
+      };
+      fillModels([], '');
+      btn(row, '拉取模型', '', loadModels);
+      model.addEventListener('change', () => { typed.hidden = model.value !== MANUAL; if (model.value === MANUAL) typed.focus(); fillEfforts(); });
+      // 思考强度：只有支持的引擎才显示；不选就用引擎自己的默认（Codex 是 low）。
+      const effortOptions = e.effortOptions || [];  // 旧后端没有这个字段
+      const effort = effortOptions.length ? H(row, 'select', 'rpd-select') : null;
+      // 选项取所选模型自己支持的强度（拉取模型时带回来的）；不知道就用这个引擎的全部选项。
+      function fillEfforts() {
+        if (!effort) return;
+        const keep = effort.value || e.effort || '';
+        const mine = known[model.value]?.efforts?.length ? known[model.value].efforts : effortOptions;
+        effort.empty();
+        H(effort, 'option', '', '思考强度：默认' + (e.key === 'codex' ? '（low）' : '')).value = '';
+        mine.forEach(v => { H(effort, 'option', '', v).value = v; });
+        effort.value = mine.includes(keep) ? keep : '';
+      }
+      if (effort) { effort.setAttribute('aria-label', e.name + ' 的思考强度'); fillEfforts(); }
+      // 接口地址和 key 是这个引擎自己的：和你日常用的命令行配置分开，key 只写不读（后端存起来，之后只告诉面板“有没有配”）。
+      const adv = H(row, 'div', 'rpd-engine-adv');
+      const base = H(adv, 'input', 'rpd-input rpd-input-inline'); base.placeholder = e.key === 'deepseek' ? '接口地址（留空用 DeepSeek 官方）' : '接口地址（留空用本机命令行自己的配置），例如 https://api.example.com/v1'; base.value = e.baseUrl || '';
+      const key = H(adv, 'input', 'rpd-input rpd-input-inline'); key.type = 'password'; key.autocomplete = 'off'; key.placeholder = e.keySet ? 'API key 已保存，留空不改' : 'API key（只存后端，保存后不再显示）';
+      const body = (extra = {}) => ({ engine: e.key, model: modelValue() || null, ...(effort ? { effort: effort.value || null } : {}), baseUrl: base.value.trim() || null, select: cfg.engine === e.key, ...extra });
+      btn(adv, '保存', 'rpd-primary', () => save(() => http('PUT', '/settings/llm', { body: body(key.value.trim() ? { apiKey: key.value.trim() } : {}) }), '已保存 ' + e.name + ' 的设置'));
+      if (e.keySet) btn(adv, '清除 key', 'rpd-ghost', () => save(() => http('PUT', '/settings/llm', { body: body({ apiKey: '' }) }), '已清除 key'));
+      radio.addEventListener('change', () => save(() => http('PUT', '/settings/llm', { body: body({ select: true }) }), '已切换到 ' + e.name));
+      [model, effort].forEach(el => el && el.addEventListener('change', () => { if (el === model && model.value === MANUAL) return; if (cfg.engine === e.key) save(() => http('PUT', '/settings/llm', { body: body() }), '已保存'); }));
+      typed.addEventListener('change', () => { if (cfg.engine === e.key) save(() => http('PUT', '/settings/llm', { body: body() }), '已保存模型'); });
+      if (cfg.engine === e.key) loadModels();
     });
-    H(engineSec, 'p', 'rpd-muted', 'API key 只在后端配置（环境变量或后端 data/secrets.json），不经过面板。');
+    H(engineSec, 'p', 'rpd-muted', '接口地址和 key 配在这里，只给后端用，和你日常的 Claude Code / Codex 配置互不影响：Codex 走 /v1/responses，后端自己生成一份配置；Claude Code 配了 key 后用后端自己的配置目录。key 存在后端 data/secrets.json，面板读不回来。');
   }
   const [pipeline, tasks, jobs] = await Promise.all([get('/pipeline'), get('/tasks?limit=15'), get('/jobs')]);
   jobsPanel(c, jobs);

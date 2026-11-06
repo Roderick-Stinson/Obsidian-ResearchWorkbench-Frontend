@@ -210,6 +210,7 @@
 .rpd-root .rpd-kw-form .rpd-tools{margin:0;}
 .rpd-root .rpd-engine{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 12px;border:1px solid var(--background-modifier-border);border-radius:8px;margin-bottom:8px;}
 .rpd-root .rpd-engine.is-on{border-color:var(--interactive-accent);}
+.rpd-root .rpd-engine-adv{flex:1 1 100%;display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
 .rpd-root .rpd-own-paper{padding:6px 0 8px;border-bottom:1px solid var(--background-modifier-border);}
 .rpd-root .rpd-own-paper .rpd-row{border:0;}
 .rpd-root .rpd-bar .rpd-kw-form{flex-basis:100%;}
