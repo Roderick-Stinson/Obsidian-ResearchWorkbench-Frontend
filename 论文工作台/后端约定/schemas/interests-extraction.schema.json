@@ -37,6 +37,9 @@
           "label": {
             "$ref": "common.schema.json#/$defs/Text"
           },
+          "labelEn": {
+            "type": "string"
+          },
           "summary": {
             "$ref": "common.schema.json#/$defs/Text"
           },
@@ -84,6 +87,9 @@
                 "label": {
                   "$ref": "common.schema.json#/$defs/Text"
                 },
+                "labelEn": {
+                  "type": "string"
+                },
                 "summary": {
                   "$ref": "common.schema.json#/$defs/Text"
                 },
@@ -130,6 +136,9 @@
                     "properties": {
                       "label": {
                         "$ref": "common.schema.json#/$defs/Text"
+                      },
+                      "labelEn": {
+                        "type": "string"
                       },
                       "summary": {
                         "$ref": "common.schema.json#/$defs/Text"

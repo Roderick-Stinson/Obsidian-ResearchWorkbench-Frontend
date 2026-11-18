@@ -9,6 +9,9 @@
     },
     "summary": {
       "type": "string"
+    },
+    "labelEn": {
+      "type": "string"
     }
   },
   "required": [

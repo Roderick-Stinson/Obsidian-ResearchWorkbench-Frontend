@@ -58,6 +58,9 @@
               "label": {
                 "$ref": "common.schema.json#/$defs/Text"
               },
+              "labelEn": {
+                "type": "string"
+              },
               "summary": {
                 "type": "string"
               },
@@ -175,6 +178,9 @@
                           },
                           "label": {
                             "$ref": "common.schema.json#/$defs/Text"
+                          },
+                          "labelEn": {
+                            "type": "string"
                           },
                           "summary": {
                             "type": "string"
@@ -334,6 +340,9 @@
               "label": {
                 "$ref": "common.schema.json#/$defs/Text"
               },
+                              "labelEn": {
+                                "type": "string"
+                              },
               "reason": {
                 "$ref": "common.schema.json#/$defs/Text"
               },

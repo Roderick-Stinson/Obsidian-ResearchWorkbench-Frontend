@@ -1325,13 +1325,14 @@ R.research = async c => {
     const form = H(parent, 'div', 'rpd-kw-form');
     const label = H(form, 'input', 'rpd-input rpd-input-inline'); label.placeholder = '关键词'; label.value = init.label || '';
     const summary = H(form, 'input', 'rpd-input'); summary.placeholder = '说明（可选）：这个关键词具体指什么、不包括什么'; summary.value = init.summary || '';
+    const labelEn = H(form, 'input', 'rpd-input'); labelEn.placeholder = '英文领域关键词，如 Credit Assignment'; labelEn.setAttribute('aria-label', '英文关键词'); labelEn.lang = 'en'; labelEn.value = init.labelEn || '';
     const bar = H(form, 'div', 'rpd-tools');
-    const go = () => { if (!label.value.trim()) return toast('关键词不能为空'); submit(label.value.trim(), summary.value.trim()); };
+    const go = () => { if (!label.value.trim()) return toast('关键词不能为空'); submit(label.value.trim(), summary.value.trim(), labelEn.value.trim()); };
     btn(bar, '保存', 'rpd-primary', go); btn(bar, '取消', 'rpd-ghost', () => form.remove());
     label.addEventListener('keydown', e => { if (e.key === 'Enter') go(); if (e.key === 'Escape') form.remove(); });
     label.focus();
   };
-  const addChild = (parentId, slot) => inlineForm(slot, {}, (label, summary) => save(() => http('POST', '/me/interests/nodes/' + enc(parentId) + '/children', { body: summary ? { label, summary } : { label } }), '已添加“' + label + '”'));
+  const addChild = (parentId, slot) => inlineForm(slot, {}, (label, summary, labelEn) => save(() => http('POST', '/me/interests/nodes/' + enc(parentId) + '/children', { body: { label, summary, labelEn } }), '已添加“' + label + '”'));
   const visible = node => t.origin === 'all' || (t.origin === 'user' ? node.origin === 'user' : node.origin !== 'user') || (node.children || []).some(visible);
 
   const tools = H(c, 'div', 'rpd-tools');
@@ -1356,13 +1357,13 @@ R.research = async c => {
   };
   const nodeHead = (parent, node, level, tag) => {
     const head = H(parent, 'div', 'rpd-kw-head');
-    H(head, tag, level === 1 ? 'rpd-domain-title' : level === 2 ? 'rpd-direction-title' : 'rpd-kw-title', (node.pinned ? '📌 ' : '') + node.label);
+    H(head, tag, level === 1 ? 'rpd-domain-title' : level === 2 ? 'rpd-direction-title' : 'rpd-kw-title', (node.pinned ? '📌 ' : '') + node.label + (node.labelEn ? '（' + node.labelEn + '）' : ''));
     const [name, cls] = ORIGIN[node.origin]; H(head, 'span', 'rpd-tag ' + cls, name);
     const bar = H(head, 'span', 'rpd-node-tools');
     const slot = H(parent, 'div');
     if (level < 3) btn(bar, '添加' + LEVEL[level + 1], 'rpd-ghost', () => addChild(node.id, slot));
-    btn(bar, '编辑', 'rpd-ghost', () => inlineForm(slot, node, (label, summary) => {
-      const patch = {}; if (label !== node.label) patch.label = label; if (summary !== node.summary) patch.summary = summary;
+    btn(bar, '编辑', 'rpd-ghost', () => inlineForm(slot, node, (label, summary, labelEn) => {
+      const patch = {}; if (label !== node.label) patch.label = label; if (summary !== node.summary) patch.summary = summary; if (labelEn !== (node.labelEn || '')) patch.labelEn = labelEn;
       if (!Object.keys(patch).length) return render();
       save(() => http('PATCH', '/me/interests/nodes/' + enc(node.id), { body: patch }), node.origin === 'user' ? '已保存' : '已保存，这个关键词转为你填写的');
     }));
