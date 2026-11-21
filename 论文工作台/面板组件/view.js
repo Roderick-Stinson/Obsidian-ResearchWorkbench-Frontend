@@ -654,6 +654,58 @@ async function expSave(change) {
 }
 const expKey = (type, id) => type + ':' + id;
 const expId = () => globalThis.crypto.randomUUID();
+function expResizeColumns(workspace, nav, divider, detail) {
+  const key = 'rpd-experiment-column-split';
+  const saved = app.loadLocalStorage(key);
+  let share = 0.22;
+  let drag = null;
+  nav.id = 'rpd-exp-nav-' + expId();
+  divider.tabIndex = 0;
+  divider.title = '拖动调整左右栏宽度，也可使用左右方向键';
+  divider.setAttribute('role', 'separator');
+  divider.setAttribute('aria-label', '调整实验记录左右栏宽度');
+  divider.setAttribute('aria-orientation', 'vertical');
+  divider.setAttribute('aria-controls', nav.id);
+  divider.setAttribute('aria-valuemin', '0');
+  divider.setAttribute('aria-valuemax', '100');
+  function resize(value) {
+    share = Math.max(0, Math.min(1, value));
+    workspace.style.setProperty('--rpd-exp-nav-share', String(share));
+    divider.setAttribute('aria-valuenow', String(Math.round(share * 100)));
+  }
+  resize(saved != null && saved !== '' && Number.isFinite(Number(saved)) ? Number(saved) : share);
+  const persist = () => app.saveLocalStorage(key, String(share));
+  const direction = () => getComputedStyle(workspace).direction === 'rtl' ? -1 : 1;
+  divider.addEventListener('pointerdown', e => {
+    if (e.button !== 0 || drag) return;
+    const travel = workspace.clientWidth - divider.offsetWidth
+      - parseFloat(getComputedStyle(nav).flexBasis) - parseFloat(getComputedStyle(detail).flexBasis);
+    if (!(travel > 0)) return;
+    e.preventDefault();
+    divider.focus({ preventScroll: true });
+    divider.setPointerCapture(e.pointerId);
+    drag = { id: e.pointerId, x: e.clientX, share, travel, direction: direction() };
+    divider.classList.add('is-dragging');
+  });
+  function move(e) {
+    if (drag?.id === e.pointerId) resize(drag.share + drag.direction * (e.clientX - drag.x) / drag.travel);
+  }
+  divider.addEventListener('pointermove', move);
+  function finish(e) {
+    if (drag?.id !== e.pointerId) return;
+    if (e.type === 'pointerup') { move(e); persist(); }
+    else resize(drag.share);
+    drag = null;
+    divider.classList.remove('is-dragging');
+  }
+  for (const event of ['pointerup', 'pointercancel', 'lostpointercapture']) divider.addEventListener(event, finish);
+  divider.addEventListener('keydown', e => {
+    const positions = { ArrowLeft: share - 0.03 * direction(), ArrowRight: share + 0.03 * direction(), Home: 0, End: 1 };
+    if (!Object.hasOwn(positions, e.key) || drag) return;
+    e.preventDefault(); e.stopPropagation();
+    resize(positions[e.key]); persist();
+  });
+}
 function expRemember(db, entity) {
   if (!db.entities.some(e => e.id === entity.id)) db.entities.push({ ...entity });
 }
@@ -1017,7 +1069,9 @@ R.experiments = async c => {
       if (!entries.length) H(group, 'p', 'rpd-muted', kind === 'paper' ? '尚未加入论文' : '尚无条目');
       entries.forEach(e => { const b = btn(group, e.title, 'rpd-exp-navitem', () => select(e.id)); b.title = e.title; b.setAttribute('aria-current', String(e.id === selected?.id)); });
     }
+    const divider = H(workspace, 'div', 'rpd-exp-divider');
     const p = H(workspace, 'div', 'rpd-exp-detail');
+    expResizeColumns(workspace, nav, divider, p);
     if (selected) {
       H(p, 'h2', 'rpd-issue-h', selected.title);
       const sources = H(p, 'div', 'rpd-exp-sources');
