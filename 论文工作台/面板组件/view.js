@@ -718,7 +718,11 @@ function expTable(parent, id, headings, rows) {
   grid.classList.add('rpd-exp-table');
   grid.parentElement.classList.add('rpd-exp-table-wrap');
   grid.style.minWidth = reserved + 'px';
-  let widths = null, drag = null;
+  let widths = null, drag = null, saveTimer;
+  function persist() {
+    clearTimeout(saveTimer);
+    app.saveLocalStorage(key, JSON.stringify(widths));
+  }
 
   // Store each column's share of the space left after its readable minimum.
   function measure() {
@@ -728,9 +732,9 @@ function expTable(parent, id, headings, rows) {
   }
   function apply(shares) {
     widths = shares;
-    grid.style.tableLayout = shares ? 'fixed' : '';
+    grid.style.tableLayout = 'fixed';
     cells.forEach((cell, i) => {
-      cell.style.width = shares ? 'calc(' + minimum + 'px + max(0px, 100cqw - ' + reserved + 'px) * ' + shares[i] + ')' : '';
+      cell.style.width = 'calc(' + minimum + 'px + max(0px, 100cqw - ' + reserved + 'px) * ' + shares[i] + ')';
     });
   }
   function describe(shares) {
@@ -762,22 +766,22 @@ function expTable(parent, id, headings, rows) {
       e.preventDefault();
       handle.focus({ preventScroll: true });
       handle.setPointerCapture(e.pointerId);
-      drag = { start, previous: widths, id: e.pointerId, x: e.clientX, sign: direction() };
+      drag = { start, id: e.pointerId, x: e.clientX, sign: direction(), moved: false };
       handle.classList.add('is-dragging');
     });
     function move(e) {
-      if (drag?.id === e.pointerId) adjust(drag.start, i, (e.clientX - drag.x) * drag.sign);
+      if (drag?.id !== e.pointerId || (!drag.moved && e.clientX === drag.x)) return;
+      adjust(drag.start, i, (e.clientX - drag.x) * drag.sign);
+      drag.moved = true;
+      // Dataview can replace the table before the captured pointer is released.
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(persist, 120);
     }
     handle.addEventListener('pointermove', move);
     function finish(e) {
       if (drag?.id !== e.pointerId) return;
-      if (e.type === 'pointerup' && drag.x !== e.clientX) {
-        move(e);
-        app.saveLocalStorage(key, JSON.stringify(widths));
-      } else {
-        apply(drag.previous);
-        describe(drag.previous || drag.start.shares);
-      }
+      if (!drag.moved && e.type === 'pointerup') move(e);
+      if (drag.moved) persist();
       drag = null;
       handle.classList.remove('is-dragging');
     }
@@ -788,7 +792,7 @@ function expTable(parent, id, headings, rows) {
       const start = measure();
       if (start.space < 1) return;
       adjust(start, i, (e.key === 'ArrowRight' ? 12 : -12) * direction());
-      app.saveLocalStorage(key, JSON.stringify(widths));
+      persist();
     });
     return handle;
   });
