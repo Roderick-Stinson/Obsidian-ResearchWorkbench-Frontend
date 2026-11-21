@@ -553,9 +553,10 @@ R.home = async c => {
   }
 };
 
-// 实验索引只由前端保存在 vault。后端仍负责运行登记和复现配置组。
+// 本机后端是会话和面板共用的实验索引。旧 Vault 记录按 ID 合入；断网的编辑排队重放。
 const EXP_DESK_FILE = EXPERIMENT_DIR + '论文实验索引.json';
 const expCollections = ['entities', 'ideas', 'configs', 'runs', 'uses'];
+let expSeenRevision = null;
 function expParse(text) {
   const db = text == null ? { version: 1, entities: [], ideas: [], configs: [], runs: [], uses: [] } : JSON.parse(text);
   if (db?.version !== 1 || !expCollections.every(key => Array.isArray(db[key]))) {
@@ -563,18 +564,93 @@ function expParse(text) {
   }
   return db;
 }
-async function expSave(change) {
+async function expLocalUpdate(edit) {
   await ensureFolder(EXPERIMENT_DIR.slice(0, -1));
-  let file = app.vault.getAbstractFileByPath(EXP_DESK_FILE);
-  if (!file) {
-    try { file = await app.vault.create(EXP_DESK_FILE, JSON.stringify(expParse(null))); }
-    catch (error) { file = app.vault.getAbstractFileByPath(EXP_DESK_FILE); if (!file) throw error; }
+  let f = app.vault.getAbstractFileByPath(EXP_DESK_FILE);
+  if (!f) {
+    try { f = await app.vault.create(EXP_DESK_FILE, JSON.stringify(expParse(null))); }
+    catch (error) { f = app.vault.getAbstractFileByPath(EXP_DESK_FILE); if (!f) throw error; }
   }
-  await app.vault.process(file, source => {
-    const db = expParse(source);
-    change(db);
-    return JSON.stringify(db, null, 2) + '\n';
+  await app.vault.process(f, text => {
+    const local = expParse(text); edit(local); return JSON.stringify(local, null, 2) + '\n';
   });
+}
+function expApply(desk, changes) {
+  for (const { collection, after } of changes) {
+    const rows = desk[collection], index = rows.findIndex(x => x.id === after.id);
+    if (index < 0) rows.push(after); else rows[index] = after;
+  }
+}
+async function expReadDesk() {
+  const file = app.vault.getAbstractFileByPath(EXP_DESK_FILE);
+  const [local, remote] = await Promise.all([file ? app.vault.read(file).then(expParse) : expParse(null), get('/experiment-desk')]);
+  if (remote.error && ![0, 404].includes(remote.error.status)) throw remote.error;
+  let desk = JSON.parse(JSON.stringify(remote.data || expParse(null)));
+  let connected = !remote.error;
+  let wrote = false, conflicted = false;
+  const legacy = [];
+  for (const key of expCollections) {
+    const ids = new Set(desk[key].map(x => x.id));
+    for (const row of local[key]) if (!ids.has(row.id)) legacy.push({ collection: key, after: row });
+  }
+  if (legacy.length && connected) {
+    try {
+      await http('POST', '/experiment-desk/changes', { body: { request_id: expId(), import_missing: true, changes: legacy } });
+      wrote = true;
+    } catch (error) { if (error.status !== 0) throw error; connected = false; }
+  }
+  expApply(desk, legacy);
+  let notice = connected ? '' : '后端暂不可用，显示本地记录。编辑将在恢复连接后同步。';
+  const drafts = [];
+  for (const batch of local.outbox || []) {
+    if (connected) {
+      try {
+        await http('POST', '/experiment-desk/changes', { body: batch });
+        wrote = true;
+        await expLocalUpdate(d => { d.outbox = (d.outbox || []).filter(b => b.request_id !== batch.request_id); });
+      } catch (error) {
+        if (error.status !== 0 && error.status !== 409) throw error;
+        connected = false;
+        conflicted = error.status === 409;
+        notice = error.status === 409 ? '离线编辑与其他会话冲突，草稿保存在 ' + EXP_DESK_FILE + '：' + error.message : '离线编辑等待同步。';
+      }
+    }
+    if (!connected) drafts.push(batch);
+    expApply(desk, batch.changes);
+  }
+  // A replay may already be acknowledged and superseded by another session.
+  if (wrote) {
+    const latest = await get('/experiment-desk');
+    if (!latest.error) {
+      desk = JSON.parse(JSON.stringify(latest.data));
+      for (const batch of drafts) expApply(desk, batch.changes);
+    } else if (latest.error.status === 0) {
+      connected = false;
+      notice ||= '连接中断，恢复后将刷新实验记录。';
+    } else throw latest.error;
+  }
+  expSeenRevision = connected || conflicted ? desk.revision : null;
+  return { desk, connected, notice };
+}
+async function expSave(change) {
+  const { desk, connected } = await expReadDesk();
+  const next = JSON.parse(JSON.stringify(desk));
+  change(next);
+  const changes = [];
+  for (const key of expCollections) {
+    const before = new Map(desk[key].map(x => [x.id, x]));
+    for (const after of next[key]) {
+      const previous = before.get(after.id);
+      if (JSON.stringify(previous) !== JSON.stringify(after)) changes.push({ collection: key, before: previous || null, after });
+    }
+  }
+  if (!changes.length) return;
+  const batch = { request_id: expId(), changes };
+  if (connected) {
+    try { await http('POST', '/experiment-desk/changes', { body: batch }); return; }
+    catch (error) { if (error.status !== 0) throw error; }
+  }
+  await expLocalUpdate(local => { (local.outbox ||= []).push(batch); });
 }
 const expKey = (type, id) => type + ':' + id;
 const expId = () => globalThis.crypto.randomUUID();
@@ -668,11 +744,8 @@ function expModel(db, folders, own, groups, inbox) {
 }
 
 R.experiments = async c => {
-  const stored = app.vault.getAbstractFileByPath(EXP_DESK_FILE);
-  const [db, own, repro, inbox] = await Promise.all([
-    stored ? app.vault.read(stored).then(expParse) : expParse(null),
-    expOwnPapers(), get('/experiments'), get('/inbox')
-  ]);
+  const [shared, own, repro, inbox] = await Promise.all([expReadDesk(), expOwnPapers(), get('/experiments'), get('/inbox')]);
+  const db = shared.desk;
   const folders = (app.vault.getAbstractFileByPath(OWN_DIR.slice(0, -1))?.children || []).filter(f => Array.isArray(f.children));
   const { entities, configs, runs } = expModel(db, folders, own.papers, repro.data?.reproGroups || [], inbox.data?.runs || []);
   const items = [...entities.values()].sort((a, b) => a.title.localeCompare(b.title, 'zh-CN', { numeric: true }));
@@ -825,13 +898,15 @@ R.experiments = async c => {
     details.setAttribute('aria-label', '运行详情'); H(details, 'h2', '', runTitle(r));
     const values = [
       ['方法 / 论文', owner?.title], ['配置', cfg?.name], ['状态', statusOf(r)], ['评测协议', cfg?.protocol],
-      ['主指标', r.score !== '' && r.score != null ? [cfg?.metric, r.score].filter(Boolean).join(' ') : ''],
+      ['主指标', r.score !== '' && r.score != null ? [cfg?.metric, r.score].filter(v => v != null && v !== '').join(' ') : ''],
       ['结果与观察', r.result], ['随机种子', r.seed], ['运行快照', r.snapshot || cfg?.commit], ['输出 / 日志', r.artifact || r.raw?.logPath],
-      ['服务器', r.raw?.host], ['开始时间', r.raw?.startedAt && fmtTime(r.raw.startedAt)], ['工作目录', r.raw?.cwd], ['命令', r.raw?.command]
+      ['结果来源', r.evidencePath], ...Object.entries(r.metrics || {}),
+      ['服务器', r.host || r.raw?.host], ['作业编号', r.jobId], ['开始时间', (r.startedAt || r.raw?.startedAt) && fmtTime(r.startedAt || r.raw.startedAt)],
+      ['结束时间', r.endedAt && fmtTime(r.endedAt)], ['工作目录', r.cwd || r.raw?.cwd], ['命令', r.command || r.raw?.command]
     ];
     table(details, ['项目', '记录'], values.filter(([, v]) => v != null && v !== ''));
     const bar = H(details, 'div', 'rpd-tools');
-    if (owner && cfg) btn(bar, '补记结果', '', () => {
+    if (owner && cfg && !r.startRequest) btn(bar, '补记结果', '', () => {
       details.close(); runForm(owner, cfg, db.runs.find(x => x.id === r.id) || { id: r.id, name: r.name });
     });
     if (owner?.kind === 'baseline') btn(bar, '引用到论文', '', () => { details.close(); citeForm(null, owner, r); });
@@ -912,6 +987,10 @@ R.experiments = async c => {
       el => {
         H(el, 'span', 'rpd-tag soft', i.stage); if (i.evidence) H(el, 'p', '', i.evidence);
         if (i.observation) H(el, 'p', 'rpd-count', '意外观察　' + i.observation);
+        for (const r of allRuns.filter(r => r.ideaId === i.id)) {
+          const line = H(el, 'div'); runLink(line, r); H(line, 'span', 'rpd-muted', ' · ' + statusOf(r));
+          if (r.result) H(line, 'p', '', r.result);
+        }
         const related = (i.runIds || '').split(/[,，\n]/).map(x => x.trim()).filter(Boolean);
         for (const id of related) {
           const matches = allRuns.filter(r => runTitle(r) === id || r.id === id);
@@ -929,6 +1008,7 @@ R.experiments = async c => {
     const tools = H(header, 'div', 'rpd-tools');
     btn(tools, '认领运行', '', () => goTab('inbox'));
     btn(tools, '刷新', 'rpd-ghost', () => { loadExperiments(); render(); });
+    if (shared.notice) H(c, 'p', 'rpd-warn', shared.notice);
     const workspace = H(c, 'div', 'rpd-exp-layout'), nav = H(workspace, 'nav', 'rpd-exp-nav');
     nav.setAttribute('aria-label', '实验记录导航');
     for (const [kind, title, entries] of [['paper', '我的论文', papers], ['baseline', '我复现的 Baseline', baselines]]) {
@@ -2079,5 +2159,15 @@ const refreshExperimentDesk = e => {
   if (!disposed && tab === 'experiments' && e.detail === app.vault.getName() + '/' + TAB_KEY) render();
 };
 window.addEventListener('rpd-experiments-saved', refreshExperimentDesk);
-const observer = new MutationObserver(() => { if (!root.isConnected) { disposed = true; app.metadataCache.offref(ref); window.removeEventListener('rpd-experiments-saved', refreshExperimentDesk); observer.disconnect(); toastEl.remove(); } });
+let expChecking = false;
+const expRefreshTimer = setInterval(async () => {
+  if (disposed || expChecking || document.hidden || tab !== 'experiments') return;
+  expChecking = true;
+  try {
+    const { revision } = await http('GET', '/experiment-desk/revision');
+    if (!disposed && tab === 'experiments' && revision !== expSeenRevision) await render();
+  } catch (_) { /* 面板保留最后一次读取到的记录。 */ }
+  finally { expChecking = false; }
+}, 12000);
+const observer = new MutationObserver(() => { if (!root.isConnected) { disposed = true; clearInterval(expRefreshTimer); app.metadataCache.offref(ref); window.removeEventListener('rpd-experiments-saved', refreshExperimentDesk); observer.disconnect(); toastEl.remove(); } });
 observer.observe(document.body, { childList: true, subtree: true });
