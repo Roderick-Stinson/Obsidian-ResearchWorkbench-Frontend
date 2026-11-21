@@ -976,6 +976,14 @@ function readingOf(p) {
 }
 const LIB_PAGE = 50;
 function sourceLabel(p) {
+  if (p.urls?.source) {
+    const host = new URL(p.urls.source, 'https://invalid.local').hostname;
+    if (/(^|\.)semanticscholar\.org$/i.test(host)) return 'Semantic Scholar 索引';
+    if (host === 'openreview.net') return 'OpenReview';
+    if (host === 'arxiv.org' || host === 'export.arxiv.org') return 'arXiv';
+    if (host === 'aclanthology.org') return 'ACL Anthology';
+    return '原文';
+  }
   if (p.id.startsWith('arxiv-')) return 'arXiv ' + p.id.slice(6);
   if (p.id.startsWith('openreview-')) return 'OpenReview';
   if (p.id.startsWith('acl-')) return 'ACL Anthology';
