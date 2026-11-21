@@ -301,3 +301,39 @@
 .rpd-root .rpd-dist-row{display:grid;grid-template-columns:minmax(120px,220px) 1fr 60px;gap:8px;align-items:center;font-size:13px;}
 .rpd-root .rpd-dist-bar{height:10px;border-radius:5px;background:var(--interactive-accent);opacity:.7;min-width:2px;}
 .rpd-root .rpd-dist-n{color:var(--text-muted);font-size:12px;}
+
+/* 实验记录：论文和复现方法共用运行记录 */
+.rpd-root .rpd-exp-layout{display:grid;grid-template-columns:minmax(165px,24%) minmax(0,1fr);gap:clamp(16px,3vw,40px);align-items:start;}
+.rpd-root .rpd-exp-nav{border-inline-end:1px solid var(--background-modifier-border);padding-inline-end:12px;}
+.rpd-root .rpd-exp-nav section+section{border-top:1px solid var(--background-modifier-border);margin-top:16px;padding-top:14px;}
+.rpd-root .rpd-exp-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px;}
+.rpd-root .rpd-exp-heading h3,.rpd-root .rpd-exp-heading .rpd-tools{margin:0;}
+.rpd-root .rpd-exp-heading h3{font-size:15px;}
+.rpd-root .rpd-exp-navitem{display:block;text-align:start;width:100%;overflow-wrap:anywhere;border:0;border-inline-start:3px solid transparent;border-radius:3px;margin:2px 0;padding:8px 10px;}
+.rpd-root .rpd-exp-navitem[aria-current=true]{border-inline-start-color:var(--interactive-accent);background:var(--background-modifier-hover);color:var(--text-accent);font-weight:600;}
+.rpd-root .rpd-exp-detail{min-width:0;}
+.rpd-root .rpd-exp-detail>.rpd-issue-h{overflow-wrap:anywhere;}
+.rpd-root .rpd-exp-sources{display:flex;flex-wrap:wrap;gap:12px;margin:3px 0 20px;font-size:12px;}
+.rpd-root .rpd-exp-detail .rpd-sec-head{justify-content:space-between;align-items:center;}
+.rpd-root .rpd-exp-detail .rpd-table td{white-space:normal;overflow-wrap:anywhere;}
+.rpd-root .rpd-exp-detail td p{margin:4px 0;white-space:pre-line;}
+.rpd-root .rpd-exp-detail td .internal-link{display:block;font-size:12px;}
+.rpd-root .rpd-exp-link{color:var(--text-accent);text-align:start;padding:1px 4px 1px 0;border:0;background:transparent;font:inherit;white-space:normal;}
+.rpd-root .rpd-exp-config{border:1px solid var(--background-modifier-border);border-radius:6px;margin-bottom:8px;}
+.rpd-root .rpd-exp-config summary,.rpd-root .rpd-exp-legacy summary{cursor:pointer;padding:8px;}
+.rpd-root .rpd-exp-config summary span{margin-inline-start:10px;}
+.rpd-root .rpd-exp-config-body{padding:4px 10px 8px;}
+.rpd-root .rpd-exp-config-body p{white-space:pre-wrap;overflow-wrap:anywhere;}
+.rpd-root .rpd-exp-config-body .rpd-tools{margin:8px 0 0;}
+.rpd-root .rpd-exp-legacy{border-top:1px solid var(--background-modifier-border);margin-top:24px;padding:8px 0;color:var(--text-muted);}
+dialog.rpd-root.rpd-exp-dialog{position:fixed;width:min(500px,94vw);max-height:85vh;overflow:auto;padding:20px 24px;border:1px solid var(--background-modifier-border);border-radius:10px;background:var(--background-primary);color:var(--text-normal);box-shadow:var(--shadow-s);container-type:normal;}
+dialog.rpd-exp-dialog::backdrop{background:rgba(0,0,0,.28);}
+.rpd-exp-dialog h2{margin-bottom:14px;}
+.rpd-exp-dialog .rpd-field .rpd-select{width:100%;}
+.rpd-exp-dialog .rpd-table td{white-space:pre-wrap;overflow-wrap:anywhere;}
+.rpd-exp-dialog .rpd-tools{margin:14px 0 0;}
+@container (max-width:620px){
+  .rpd-root .rpd-exp-layout{grid-template-columns:minmax(0,1fr);gap:16px;}
+  .rpd-root .rpd-exp-nav{display:grid;grid-template-columns:1fr 1fr;gap:12px;border:0;border-bottom:1px solid var(--background-modifier-border);padding:0 0 12px;}
+  .rpd-root .rpd-exp-nav section+section{margin:0;padding:0;border:0;}
+}

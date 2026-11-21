@@ -553,21 +553,381 @@ R.home = async c => {
   }
 };
 
-R.experiments = async c => {
-  H(c, 'h2', 'rpd-issue-h', '实验记录');
-  H(c, 'p', 'rpd-lead', '实验在远端服务器运行；这里记录配置、运行状态、结果与结论。');
-  const actions = H(c, 'div', 'rpd-tools');
-  btn(actions, '新建实验记录', 'rpd-primary', createExperimentRecord);
-  btn(actions, '刷新', '', () => { loadExperiments(); render(); });
-  const section = sec(c, '我的实验记录', experiments.length + ' 条 · vault 中“实验记录/”或带 #experiment / type: experiment 的笔记');
-  if (!experiments.length) empty(section, '暂无实验记录。');
-  experiments.forEach(e => { const card = H(section, 'article', 'rpd-card'); const header = H(card, 'div', 'rpd-card-head'); fileLink(header, e.path, e.title); H(header, 'span', 'rpd-tag ' + (ALERT_STATUS.includes(e.status) ? 'warn' : 'soft'), e.status); const meta = H(card, 'div', 'rpd-meta'); H(meta, 'span', '', '服务器：' + e.server); if (e.updated) H(meta, 'span', '', '更新：' + new Date(e.updated).toLocaleString('zh-CN')); if (e.summary) H(card, 'p', 'rpd-sum', e.summary); });
-  const repro = sec(c, '复现配置组', '后端汇总的复现结果与论文数字的差距');
-  const data = shown(repro, await get('/experiments'), '复现配置组');
-  if (data) {
-    if (!data.reproGroups.length) empty(repro, '暂无复现配置组。');
-    else table(repro, ['配置组', '论文', 'Run', '状态', '容差内', '差得最多'], data.reproGroups.map(g => [g.name, td => g.paper ? paperRef(td, g.paper) : td.setText('—'), g.runCount, g.status, g.withinTolerance + ' / ' + g.total + (g.missing ? '（' + g.missing + ' 项没跑）' : ''), g.worstDiffs.map(d => d.metric + ' ' + (d.delta > 0 ? '+' : '') + d.delta).join('，') || '—']));
+// 实验索引只由前端保存在 vault。后端仍负责运行登记和复现配置组。
+const EXP_DESK_FILE = EXPERIMENT_DIR + '论文实验索引.json';
+const expCollections = ['entities', 'ideas', 'configs', 'runs', 'uses'];
+function expParse(text) {
+  const db = text == null ? { version: 1, entities: [], ideas: [], configs: [], runs: [], uses: [] } : JSON.parse(text);
+  if (db?.version !== 1 || !expCollections.every(key => Array.isArray(db[key]))) {
+    throw new Error('实验索引格式无法识别，请检查 ' + EXP_DESK_FILE);
   }
+  return db;
+}
+async function expSave(change) {
+  await ensureFolder(EXPERIMENT_DIR.slice(0, -1));
+  let file = app.vault.getAbstractFileByPath(EXP_DESK_FILE);
+  if (!file) {
+    try { file = await app.vault.create(EXP_DESK_FILE, JSON.stringify(expParse(null))); }
+    catch (error) { file = app.vault.getAbstractFileByPath(EXP_DESK_FILE); if (!file) throw error; }
+  }
+  await app.vault.process(file, source => {
+    const db = expParse(source);
+    change(db);
+    return JSON.stringify(db, null, 2) + '\n';
+  });
+}
+const expKey = (type, id) => type + ':' + id;
+const expId = () => globalThis.crypto.randomUUID();
+function expRemember(db, entity) {
+  if (!db.entities.some(e => e.id === entity.id)) db.entities.push({ ...entity });
+}
+const expDifference = (value, target) => String(Number((Number(value) - Number(target)).toPrecision(8)));
+function expWebUrl(value) {
+  if (!value) return '';
+  const url = new URL(value);
+  if (!['https:', 'http:'].includes(url.protocol)) throw new Error('请填写 http 或 https 网页链接');
+  return url.href;
+}
+
+// 弹窗独立于 Dataview 的重绘，写入失败时保留草稿。
+function expForm(title, fields, submit, action = '保存') {
+  const dialog = H(document.body, 'dialog', 'rpd-root rpd-exp-dialog');
+  const form = H(dialog, 'form'); const heading = H(form, 'h2', '', title);
+  heading.id = 'exp-dialog-' + expId(); dialog.setAttribute('aria-labelledby', heading.id);
+  const inputs = {};
+  for (const f of fields) {
+    const label = H(form, 'label', 'rpd-field');
+    H(label, 'span', '', f.label + (f.required ? ' *' : ''));
+    const el = H(label, f.options ? 'select' : f.long ? 'textarea' : 'input', f.options ? 'rpd-select' : f.long ? 'rpd-textarea' : 'rpd-input');
+    if (f.options) f.options.forEach(([value, text]) => { H(el, 'option', '', text).value = value; });
+    if (f.type) el.type = f.type;
+    if (f.type === 'number') el.step = 'any';
+    if (f.placeholder) el.placeholder = f.placeholder;
+    if (f.value != null) el.value = f.value;
+    el.required = !!f.required; inputs[f.key] = el;
+  }
+  const message = H(form, 'p', 'rpd-warn'); message.setAttribute('role', 'alert');
+  const bar = H(form, 'div', 'rpd-tools');
+  const save = H(bar, 'button', 'rpd-btn rpd-primary', action); save.type = 'submit';
+  btn(bar, '取消', '', () => dialog.close());
+  form.addEventListener('submit', async event => {
+    event.preventDefault(); if (save.disabled) return;
+    const values = Object.fromEntries(Object.entries(inputs).map(([k, el]) => [k, el.value.trim()]));
+    if (fields.some(f => f.required && !values[f.key])) { message.setText('请填写必填项'); return; }
+    save.disabled = true;
+    try { await submit(values); dialog.close(); }
+    catch (error) { message.setText(error.message); save.disabled = false; }
+  });
+  dialog.addEventListener('close', () => dialog.remove(), { once: true });
+  dialog.showModal();
+  return inputs;
+}
+
+async function expOwnPapers() {
+  const papers = [], notices = []; let path = '/papers?own=true&limit=200';
+  do {
+    const response = await get(path);
+    if (response.error || response.cachedAt) notices.push(response);
+    papers.push(...(response.data?.items || []));
+    path = response.data?.nextCursor ? '/papers?own=true&limit=200&cursor=' + enc(response.data.nextCursor) : '';
+  } while (path);
+  return { papers, notices };
+}
+
+function expModel(db, folders, own, groups, inbox) {
+  const entities = new Map(db.entities.map(e => [e.id, e]));
+  const configs = new Map(db.configs.map(c => [c.id, c]));
+  const runs = new Map(db.runs.map(r => [r.id, r]));
+  folders.forEach(f => {
+    const id = expKey('folder', f.path);
+    entities.set(id, { id, kind: 'paper', title: f.name, folder: f.path });
+  });
+  own.forEach(p => {
+    const id = expKey('paper', p.id);
+    entities.set(id, { id, kind: 'paper', title: p.titleZh || p.title || p.id, source: p.urls?.source || '' });
+  });
+  groups.forEach(g => {
+    const id = g.paper ? expKey('source', g.paper.id) : expKey('method-group', g.id);
+    if (!entities.has(id)) entities.set(id, { id, kind: 'baseline', title: g.paper?.title || g.name, source: g.paper?.url || '' });
+    const cfg = expKey('group', g.id);
+    configs.set(cfg, { id: cfg, owner: id, name: g.name, group: g });
+  });
+  inbox.forEach(raw => {
+    const id = expKey('server', raw.runId), local = runs.get(id);
+    const claim = raw.claimedBy;
+    const config = local?.config || (claim?.kind === 'reproGroup' ? expKey('group', claim.id) : '');
+    const owner = configs.get(config)?.owner || (claim?.kind === 'paper' ? expKey('paper', claim.id) : '');
+    runs.set(id, { ...local, id, name: raw.runId, config, owner, raw });
+  });
+  return { entities, configs, runs };
+}
+
+R.experiments = async c => {
+  const stored = app.vault.getAbstractFileByPath(EXP_DESK_FILE);
+  const [db, own, repro, inbox] = await Promise.all([
+    stored ? app.vault.read(stored).then(expParse) : expParse(null),
+    expOwnPapers(), get('/experiments'), get('/inbox')
+  ]);
+  const folders = (app.vault.getAbstractFileByPath(OWN_DIR.slice(0, -1))?.children || []).filter(f => Array.isArray(f.children));
+  const { entities, configs, runs } = expModel(db, folders, own.papers, repro.data?.reproGroups || [], inbox.data?.runs || []);
+  const items = [...entities.values()].sort((a, b) => a.title.localeCompare(b.title, 'zh-CN', { numeric: true }));
+  const papers = items.filter(e => e.kind === 'paper'), baselines = items.filter(e => e.kind === 'baseline');
+  const stateKey = app.vault.getName() + '/' + TAB_KEY;
+  const selection = window.__rpdExperimentSelection ||= {};
+  let selected = entities.get(selection[stateKey]) || papers[0] || baselines[0];
+  const select = id => { selection[stateKey] = id; selected = entities.get(id); draw(); };
+  const save = async (change, next) => {
+    await expSave(change);
+    if (next) selection[stateKey] = next;
+    window.dispatchEvent(new CustomEvent('rpd-experiments-saved', { detail: stateKey }));
+  };
+  const field = (key, label, extra) => ({ key, label, ...extra });
+  const configOf = run => configs.get(run.config);
+  const ownerOf = run => entities.get(configOf(run)?.owner || run.owner);
+  const noteOptions = [['', '选择实验笔记（可选）'], ...experiments.map(n => [n.path, n.title])];
+  const allRuns = [...runs.values()];
+  const runTitle = r => r.name || r.id;
+  const statusOf = r => ({ running: '运行中', finished: '已完成', failed: '失败' }[r.raw?.status] || r.status || '待记录');
+  const jump = (el, label, action) => btn(el, label, 'rpd-exp-link', action);
+  function sourceLink(el, url, label) { try { if (url) extLink(el, expWebUrl(url), label); } catch (_) {} }
+  function section(parent, title, label, fn) {
+    const s = sec(parent, title);
+    if (label) btn(s.firstElementChild, label, 'rpd-ghost', fn);
+    return s;
+  }
+
+  function addEntity(kind) {
+    const isPaper = kind === 'paper';
+    expForm(isPaper ? '新建论文项目' : '登记复现的 Baseline', [
+      field('title', isPaper ? '论文名称' : '方法名称', { required: true }),
+      field('source', '原论文链接', { type: 'url' }),
+      ...(isPaper ? [] : [field('repo', '开源仓库链接', { type: 'url' })])
+    ], async v => {
+      const e = { id: expKey(kind, expId()), kind, title: v.title, source: expWebUrl(v.source), repo: expWebUrl(v.repo) };
+      await save(d => {
+        if ([...items, ...d.entities].some(x => x.kind === kind && x.title === e.title)) throw new Error('同名条目已存在，请在左栏选择它');
+        expRemember(d, e);
+      }, e.id);
+    });
+  }
+
+  function ideaForm(paper, idea) {
+    expForm(idea ? '更新验证进展' : '记录一个想法', [
+      field('question', '要验证什么', { required: true }),
+      field('stage', '当前判断', { options: ['待验证', '验证中', '小样本支持', '全量支持', '结果不一致', '暂不支持', '已搁置'].map(s => [s, s]) }),
+      field('evidence', '当前证据', { long: true }),
+      field('next', '下一步'),
+      field('observation', '意外观察'),
+      field('runIds', '关联运行编号（多个用逗号分隔）'),
+      field('note', '实验笔记', { options: noteOptions })
+    ].map(f => ({ ...f, value: idea?.[f.key] })), async v => {
+      await save(d => {
+        expRemember(d, paper);
+        if (!idea) { d.ideas.push({ ...v, id: expId(), owner: paper.id }); return; }
+        const index = d.ideas.findIndex(x => x.id === idea.id);
+        if (JSON.stringify(d.ideas[index]) !== JSON.stringify(idea)) throw new Error('这条进展已在别处更新，请重新打开后编辑');
+        d.ideas[index] = { ...idea, ...v };
+      }, paper.id);
+    });
+  }
+
+  function configForm(owner, parent) {
+    expForm(parent ? '从当前配置派生' : '添加实验配置', [
+      field('name', '配置名称', { required: true }),
+      field('dataset', '数据集与切分', { value: parent?.dataset }),
+      field('params', '参数与本次改动', { long: true, value: parent?.params }),
+      field('protocol', '评测协议（评价器、指标与汇总方式）', { value: parent?.protocol }),
+      field('commit', 'Git 提交或快照位置', { value: parent?.commit }),
+      field('metric', '主指标与单位', { value: parent?.metric, placeholder: '例如：成功率（%）' }),
+      field('original', '原论文报告值（可选）', { type: 'number' })
+    ], v => save(d => {
+      if (v.original && !v.metric) throw new Error('请填写原文数字对应的指标和单位');
+      expRemember(d, owner);
+      d.configs.push({ ...v, id: expId(), owner: owner.id, parent: parent?.id || '', parentName: parent?.name || '' });
+    }, owner.id));
+  }
+
+  function runForm(owner, cfg, previous) {
+    const available = allRuns.filter(r => r.raw && (!r.config || r.config === cfg.id) && (!ownerOf(r) || ownerOf(r).id === owner.id) && !db.runs.some(x => x.id === r.id));
+    const fields = [
+      ...(previous ? [] : [field('serverId', '关联服务器登记', { options: [['', '手工登记一次运行'], ...available.map(r => [r.id, r.name + ' · ' + statusOf(r)])] })]),
+      field('name', '运行编号（手工登记时填写）', { value: previous?.name }),
+      field('status', '运行状态', { options: ['已完成', '运行中', '失败', '已取消'].map(s => [s, s]), value: previous?.status }),
+      field('score', (cfg.metric || '主指标') + '实测值', { type: 'number', value: previous?.score }),
+      field('result', '结果与观察', { long: true, value: previous?.result }),
+      field('seed', '随机种子', { value: previous?.seed }),
+      field('snapshot', '运行快照 / Git 提交', { value: previous?.snapshot || cfg.commit }),
+      field('artifact', '原始输出 / 日志路径', { value: previous?.artifact })
+    ];
+    expForm(previous ? '补记运行结果' : '记录一次运行', fields, v => save(d => {
+      const remote = runs.get(v.serverId || previous?.id);
+      if (!remote?.raw && !v.name) throw new Error('请选择服务器运行，或填写运行编号');
+      const id = previous?.id || v.serverId || expId();
+      const row = { ...v, id, name: remote?.raw?.runId || v.name, config: cfg.id, owner: owner.id };
+      const index = d.runs.findIndex(x => x.id === id);
+      if (index >= 0 && (!previous || JSON.stringify(d.runs[index]) !== JSON.stringify(previous))) throw new Error('该运行已有更新，请重新打开后补记');
+      if (d.runs.some(r => r.id !== id && r.name === row.name && r.owner === owner.id)) throw new Error('已有同编号运行，请打开原记录补记，或为重跑使用新编号');
+      expRemember(d, owner);
+      if (!d.configs.some(x => x.id === cfg.id)) d.configs.push(cfg);
+      if (index < 0) d.runs.push(row); else d.runs[index] = row;
+    }, owner.id));
+  }
+
+  function citeForm(paper, baseline, initialRun) {
+    const options = allRuns.filter(r => ownerOf(r)?.kind === 'baseline' && (!baseline || ownerOf(r).id === baseline.id));
+    if (!options.length) return toast('先在 Baseline 配置下记录一条运行结果');
+    if (!papers.length) return toast('请先从左栏添加论文');
+    expForm('引用 Baseline 运行结果', [
+      field('paper', '使用结果的论文', { options: (paper ? [paper] : papers).map(p => [p.id, p.title]) }),
+      field('run', '方法 / 配置 / 运行', { options: options.map(r => [r.id, [ownerOf(r).title, configOf(r)?.name, runTitle(r)].filter(Boolean).join(' / ')]), value: initialRun?.id }),
+      field('place', '用在论文的哪里', { required: true, placeholder: '例如：表 1 主结果、图 3 通信成本' }),
+      field('metric', '引用的指标或结果', { placeholder: '例如：每题平均通信轮数' })
+    ], v => save(d => {
+      const p = entities.get(v.paper), r = runs.get(v.run), b = ownerOf(r), cfg = configOf(r);
+      if (d.uses.some(u => u.paper === p.id && u.run === r.id && u.place === v.place && u.metric === v.metric)) throw new Error('这项引用已经登记');
+      expRemember(d, p); expRemember(d, b);
+      if (cfg && !d.configs.some(x => x.id === cfg.id)) d.configs.push(cfg);
+      if (!d.runs.some(x => x.id === r.id)) d.runs.push({ id: r.id, name: r.name, owner: b.id, config: r.config, status: statusOf(r) });
+      d.uses.push({ id: expId(), paper: p.id, baseline: b.id, config: cfg?.id, run: r.id, place: v.place, metric: v.metric });
+    }, (paper || baseline).id));
+  }
+
+  function runLink(el, run) {
+    if (!run) return H(el, 'span', 'rpd-muted', '未找到运行');
+    jump(el, runTitle(run), () => showRun(run));
+  }
+  function showRun(r) {
+    const cfg = configOf(r), owner = ownerOf(r);
+    const details = H(document.body, 'dialog', 'rpd-root rpd-exp-dialog');
+    details.setAttribute('aria-label', '运行详情'); H(details, 'h2', '', runTitle(r));
+    const values = [
+      ['方法 / 论文', owner?.title], ['配置', cfg?.name], ['状态', statusOf(r)], ['评测协议', cfg?.protocol],
+      ['主指标', r.score !== '' && r.score != null ? [cfg?.metric, r.score].filter(Boolean).join(' ') : ''],
+      ['结果与观察', r.result], ['随机种子', r.seed], ['运行快照', r.snapshot || cfg?.commit], ['输出 / 日志', r.artifact || r.raw?.logPath],
+      ['服务器', r.raw?.host], ['开始时间', r.raw?.startedAt && fmtTime(r.raw.startedAt)], ['工作目录', r.raw?.cwd], ['命令', r.raw?.command]
+    ];
+    table(details, ['项目', '记录'], values.filter(([, v]) => v != null && v !== ''));
+    const bar = H(details, 'div', 'rpd-tools');
+    if (owner && cfg) btn(bar, '补记结果', '', () => {
+      details.close(); runForm(owner, cfg, db.runs.find(x => x.id === r.id) || { id: r.id, name: r.name });
+    });
+    if (owner?.kind === 'baseline') btn(bar, '引用到论文', '', () => { details.close(); citeForm(null, owner, r); });
+    btn(bar, '关闭', '', () => details.close());
+    details.addEventListener('close', () => details.remove(), { once: true }); details.showModal();
+  }
+
+  function originalResults(parent, item) {
+    const originals = [...configs.values()].filter(cfg => cfg.owner === item.id && (cfg.group || (cfg.original != null && cfg.original !== '')));
+    if (!originals.length) return;
+    const s = sec(parent, '原文复现');
+    const rows = [];
+    for (const cfg of originals) {
+      const measured = allRuns.filter(r => r.config === cfg.id && r.score != null && r.score !== '');
+      if (cfg.original != null && cfg.original !== '') {
+        for (const r of measured.length ? measured : [null]) rows.push([
+          cfg.name, cfg.metric, cfg.original, r ? r.score : '—', r ? expDifference(r.score, cfg.original) : '—',
+          el => r ? runLink(el, r) : H(el, 'span', 'rpd-muted', '待运行')
+        ]);
+      }
+      if (cfg.group) {
+        const g = cfg.group;
+        H(s, 'p', 'rpd-count', g.name + ' · ' + g.status + ' · 容差内 ' + g.withinTolerance + ' / ' + g.total + ' · 缺 ' + g.missing + ' 项');
+      }
+    }
+    if (rows.length) table(s, ['配置', '指标', '原文值', '实测值', '差值', '对应运行'], rows);
+  }
+  function configSection(parent, item) {
+    const list = [...configs.values()].filter(cfg => cfg.owner === item.id);
+    const isBaseline = item.kind === 'baseline';
+    const s = section(parent, isBaseline ? '配置与运行结果' : '本文方法的实验', '＋ 配置', () => configForm(item));
+    if (!list.length) empty(s, isBaseline ? '添加原文复现配置，即可记录实测值；换数据集或调参时可派生新配置。' : '添加配置，登记本文方法的小试、全量或消融运行。');
+    for (const cfg of list) {
+      const box = H(s, 'details', 'rpd-exp-config'); box.open = cfg === list[0];
+      const summary = H(box, 'summary'); H(summary, 'strong', '', cfg.name);
+      const rr = allRuns.filter(r => r.config === cfg.id);
+      H(summary, 'span', 'rpd-muted', [cfg.dataset, cfg.group?.status, Math.max(rr.length, cfg.group?.runCount || 0) + ' 次运行'].filter(Boolean).join(' · '));
+      const body = H(box, 'div', 'rpd-exp-config-body');
+      const meta = [['派生自', cfg.parentName], ['数据集', cfg.dataset], ['参数', cfg.params], ['评测协议', cfg.protocol], ['Git / 快照', cfg.commit], ['原文报告值', cfg.original !== '' && cfg.original != null ? cfg.metric + ' ' + cfg.original : '']];
+      for (const [label, value] of meta) if (value) H(body, 'p', 'rpd-count', label + '　' + value);
+      if (cfg.group) {
+        const g = cfg.group;
+        H(body, 'p', 'rpd-count', '容差内 ' + g.withinTolerance + ' / ' + g.total + ' · 缺 ' + g.missing + ' 项');
+        if (g.worstDiffs?.length) H(body, 'p', 'rpd-count', '差距最大　' + g.worstDiffs.map(d => d.metric + ' ' + num(d.delta)).join('，'));
+        if (g.note) H(body, 'p', 'rpd-count', g.note);
+      }
+      if (rr.length) table(body, ['运行', '状态', cfg.metric || '实测值', '与原文之差', '结果与观察'], rr.map(r => [
+        el => runLink(el, r), statusOf(r), num(r.score === '' ? null : r.score),
+        cfg.original !== '' && cfg.original != null && r.score !== '' && r.score != null ? expDifference(r.score, cfg.original) : '—',
+        r.result || '—'
+      ]));
+      else H(body, 'p', 'rpd-muted', '尚无关联的逐次运行明细。');
+      const bar = H(body, 'div', 'rpd-tools');
+      btn(bar, '记录运行', '', () => runForm(item, cfg)); btn(bar, '派生配置', 'rpd-ghost', () => configForm(item, cfg));
+    }
+  }
+
+  function references(parent, item) {
+    const isPaper = item.kind === 'paper';
+    const s = section(parent, isPaper ? '本文引用的 Baseline 结果' : '哪些论文用了这些结果', isPaper ? '＋ 引用结果' : '引用到论文', () => citeForm(isPaper ? item : null, isPaper ? null : item));
+    const uses = db.uses.filter(u => (isPaper ? u.paper : u.baseline) === item.id);
+    if (!uses.length) return empty(s, '尚未登记论文引用。');
+    table(s, [isPaper ? 'Baseline' : '我的论文', '图表 / 用途', '配置 / 评测协议', '运行', '引用指标'], uses.map(u => {
+      const other = entities.get(isPaper ? u.baseline : u.paper), cfg = configs.get(u.config);
+      return [el => other && jump(el, other.title, () => select(other.id)), u.place, [cfg?.name, cfg?.protocol].filter(Boolean).join(' · ') || '—', el => runLink(el, runs.get(u.run)), u.metric || '—'];
+    }));
+  }
+  function paperView(p, item) {
+    const s = section(p, '想法验证进展', '＋ 记录想法', () => ideaForm(item));
+    const ideas = db.ideas.filter(i => i.owner === item.id);
+    if (!ideas.length) empty(s, '记下第一个要验证的问题，随后补充证据、意外观察和下一步。');
+    else table(s, ['研究问题', '进展与当前证据', '下一步'], ideas.map(i => [
+      el => { jump(el, i.question, () => ideaForm(item, i)); if (i.note) fileLink(el, i.note, '实验笔记'); },
+      el => {
+        H(el, 'span', 'rpd-tag soft', i.stage); if (i.evidence) H(el, 'p', '', i.evidence);
+        if (i.observation) H(el, 'p', 'rpd-count', '意外观察　' + i.observation);
+        const related = (i.runIds || '').split(/[,，\n]/).map(x => x.trim()).filter(Boolean);
+        for (const id of related) {
+          const matches = allRuns.filter(r => runTitle(r) === id || r.id === id);
+          if (matches.length === 1) runLink(el, matches[0]); else H(el, 'span', 'rpd-muted', id + ' ');
+        }
+        allRuns.filter(r => i.note && r.raw?.claimedBy?.kind === 'experimentNote' && r.raw.claimedBy.id === i.note && !related.includes(runTitle(r))).forEach(r => runLink(el, r));
+      }, i.next || '—'
+    ]));
+    const ungrouped = allRuns.filter(r => !r.config && r.owner === item.id);
+    if (ungrouped.length) { const s = sec(p, '已认领到本文的运行'); ungrouped.forEach(r => runLink(s, r)); }
+    references(p, item); configSection(p, item);
+  }
+  function draw() {
+    c.empty(); const header = H(c, 'div', 'rpd-exp-heading'); H(header, 'h2', 'rpd-issue-h', '实验记录');
+    const tools = H(header, 'div', 'rpd-tools');
+    btn(tools, '认领运行', '', () => goTab('inbox'));
+    btn(tools, '刷新', 'rpd-ghost', () => { loadExperiments(); render(); });
+    const workspace = H(c, 'div', 'rpd-exp-layout'), nav = H(workspace, 'nav', 'rpd-exp-nav');
+    nav.setAttribute('aria-label', '实验记录导航');
+    for (const [kind, title, entries] of [['paper', '我的论文', papers], ['baseline', '我复现的 Baseline', baselines]]) {
+      const group = H(nav, 'section'); const h = H(group, 'div', 'rpd-exp-heading'); H(h, 'h3', '', title);
+      const plus = btn(h, '＋', 'rpd-ghost', () => addEntity(kind)); plus.setAttribute('aria-label', '添加' + (kind === 'paper' ? '论文' : 'Baseline'));
+      if (!entries.length) H(group, 'p', 'rpd-muted', '尚无条目');
+      entries.forEach(e => { const b = btn(group, e.title, 'rpd-exp-navitem', () => select(e.id)); b.setAttribute('aria-current', String(e.id === selected?.id)); });
+    }
+    const p = H(workspace, 'div', 'rpd-exp-detail');
+    if (selected) {
+      H(p, 'h2', 'rpd-issue-h', selected.title);
+      const sources = H(p, 'div', 'rpd-exp-sources');
+      sourceLink(sources, selected.source, '原论文 ↗'); sourceLink(sources, selected.repo, '开源仓库 ↗');
+      if (selected.folder) H(sources, 'span', 'rpd-muted', selected.folder);
+      if (selected.kind === 'paper') paperView(p, selected);
+      else { originalResults(p, selected); configSection(p, selected); references(p, selected); }
+    } else empty(p, '从左侧添加一篇论文或一个已复现的 Baseline。');
+    const legacy = H(c, 'details', 'rpd-exp-legacy');
+    H(legacy, 'summary', '', '实验笔记 · ' + experiments.length);
+    btn(legacy, '新建实验记录笔记', '', createExperimentRecord);
+    experiments.forEach(e => { const row = H(legacy, 'div', 'rpd-row'); fileLink(row, e.path, e.title); H(row, 'span', 'rpd-muted', [e.status, e.server, e.summary].filter(Boolean).join(' · ')); });
+    const notices = [...own.notices.map(r => ['本人论文', r]), ['复现配置组', repro], ['服务器运行', inbox]]
+      .filter(([, r]) => r.cachedAt || r.error);
+    if (notices.length) H(c, 'p', 'rpd-count', notices.map(([label, r]) => label + '：' + (r.cachedAt ? '离线缓存 ' + fmtTime(r.cachedAt) : r.error?.status === 404 ? '尚无后端记录' : errorText(r.error))).join('　'));
+  }
+  draw();
 };
 
 const CATEGORY = { core: ['核心', '与你的关键词树直接匹配'], adjacent: ['邻近', '和你标为相关的论文有引用关系，但不在你的关键词里'], trending: ['热点', '一级领域里增长快、讨论多，不看关键词'] };
@@ -1688,5 +2048,9 @@ const ref = app.metadataCache.on('changed', file => {
   localTimer = setTimeout(async () => { await Promise.all([loadNotes(), loadExperiments()]); if (!disposed && ['home', 'experiments', 'lib', 'watched', 'research'].includes(tab)) render(); }, 1000);
   if (isNote) { clearTimeout(syncTimer); syncTimer = setTimeout(async () => { if (disposed) return; await loadNotes(); syncNotes(); }, 10000); }
 });
-const observer = new MutationObserver(() => { if (!root.isConnected) { disposed = true; app.metadataCache.offref(ref); observer.disconnect(); toastEl.remove(); } });
+const refreshExperimentDesk = e => {
+  if (!disposed && tab === 'experiments' && e.detail === app.vault.getName() + '/' + TAB_KEY) render();
+};
+window.addEventListener('rpd-experiments-saved', refreshExperimentDesk);
+const observer = new MutationObserver(() => { if (!root.isConnected) { disposed = true; app.metadataCache.offref(ref); window.removeEventListener('rpd-experiments-saved', refreshExperimentDesk); observer.disconnect(); toastEl.remove(); } });
 observer.observe(document.body, { childList: true, subtree: true });
