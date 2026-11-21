@@ -709,6 +709,98 @@ function expResizeColumns(workspace, nav, divider, detail) {
 function expRemember(db, entity) {
   if (!db.entities.some(e => e.id === entity.id)) db.entities.push({ ...entity });
 }
+function expTable(parent, id, headings, rows) {
+  const grid = table(parent, headings, rows);
+  const cells = Array.from(grid.tHead.rows[0].cells);
+  const key = 'rpd-experiment-table-widths/' + id;
+  const minimum = 48;
+  const reserved = minimum * cells.length;
+  grid.classList.add('rpd-exp-table');
+  grid.parentElement.classList.add('rpd-exp-table-wrap');
+  grid.style.minWidth = reserved + 'px';
+  let widths = null, drag = null;
+
+  // Store each column's share of the space left after its readable minimum.
+  function measure() {
+    const extra = cells.map(cell => Math.max(0, cell.getBoundingClientRect().width - minimum));
+    const space = extra.reduce((sum, n) => sum + n, 0);
+    return { space, shares: space > 0 ? extra.map(n => n / space) : extra.map(() => 1 / cells.length) };
+  }
+  function apply(shares) {
+    widths = shares;
+    grid.style.tableLayout = shares ? 'fixed' : '';
+    cells.forEach((cell, i) => {
+      cell.style.width = shares ? 'calc(' + minimum + 'px + max(0px, 100cqw - ' + reserved + 'px) * ' + shares[i] + ')' : '';
+    });
+  }
+  function describe(shares) {
+    handles.forEach((handle, i) => {
+      const pair = shares[i] + shares[i + 1];
+      handle.setAttribute('aria-valuenow', String(pair ? Math.round(100 * shares[i] / pair) : 0));
+    });
+  }
+  function adjust(start, index, delta) {
+    const next = start.shares.slice(), pair = next[index] + next[index + 1];
+    next[index] = Math.max(0, Math.min(pair, next[index] + delta / start.space));
+    next[index + 1] = pair - next[index];
+    apply(next);
+    describe(next);
+  }
+  const handles = cells.slice(0, -1).map((cell, i) => {
+    const handle = H(cell, 'span', 'rpd-exp-col-grip');
+    handle.tabIndex = 0;
+    handle.title = '拖动调整列宽，也可使用左右方向键';
+    handle.setAttribute('role', 'separator');
+    handle.setAttribute('aria-label', '调整「' + headings[i] + '」和「' + headings[i + 1] + '」的列宽');
+    handle.setAttribute('aria-orientation', 'vertical');
+    handle.addEventListener('focus', () => describe(widths || measure().shares));
+    const direction = () => getComputedStyle(grid).direction === 'rtl' ? -1 : 1;
+    handle.addEventListener('pointerdown', e => {
+      if (e.button !== 0 || drag) return;
+      const start = measure();
+      if (start.space < 1) return;
+      e.preventDefault();
+      handle.focus({ preventScroll: true });
+      handle.setPointerCapture(e.pointerId);
+      drag = { start, previous: widths, id: e.pointerId, x: e.clientX, sign: direction() };
+      handle.classList.add('is-dragging');
+    });
+    function move(e) {
+      if (drag?.id === e.pointerId) adjust(drag.start, i, (e.clientX - drag.x) * drag.sign);
+    }
+    handle.addEventListener('pointermove', move);
+    function finish(e) {
+      if (drag?.id !== e.pointerId) return;
+      if (e.type === 'pointerup' && drag.x !== e.clientX) {
+        move(e);
+        app.saveLocalStorage(key, JSON.stringify(widths));
+      } else {
+        apply(drag.previous);
+        describe(drag.previous || drag.start.shares);
+      }
+      drag = null;
+      handle.classList.remove('is-dragging');
+    }
+    for (const event of ['pointerup', 'pointercancel', 'lostpointercapture']) handle.addEventListener(event, finish);
+    handle.addEventListener('keydown', e => {
+      if (drag || !['ArrowLeft', 'ArrowRight'].includes(e.key)) return;
+      e.preventDefault(); e.stopPropagation();
+      const start = measure();
+      if (start.space < 1) return;
+      adjust(start, i, (e.key === 'ArrowRight' ? 12 : -12) * direction());
+      app.saveLocalStorage(key, JSON.stringify(widths));
+    });
+    return handle;
+  });
+  try {
+    const saved = JSON.parse(app.loadLocalStorage(key));
+    if (Array.isArray(saved) && saved.length === cells.length && saved.every(v => Number.isFinite(v) && v >= 0)
+        && Math.abs(saved.reduce((a, b) => a + b, 0) - 1) < 0.0001) {
+      apply(saved);
+      describe(saved);
+    }
+  } catch { /* Fall back to the natural column widths. */ }
+}
 const expDifference = (value, target) => String(Number((Number(value) - Number(target)).toPrecision(8)));
 function expWebUrl(value) {
   if (!value) return '';
@@ -956,7 +1048,7 @@ R.experiments = async c => {
       ['服务器', r.host || r.raw?.host], ['作业编号', r.jobId], ['开始时间', (r.startedAt || r.raw?.startedAt) && fmtTime(r.startedAt || r.raw.startedAt)],
       ['结束时间', r.endedAt && fmtTime(r.endedAt)], ['工作目录', r.cwd || r.raw?.cwd], ['命令', r.command || r.raw?.command]
     ];
-    table(details, ['项目', '记录'], values.filter(([, v]) => v != null && v !== ''));
+    expTable(details, 'run/' + r.id, ['项目', '记录'], values.filter(([, v]) => v != null && v !== ''));
     const bar = H(details, 'div', 'rpd-tools');
     if (owner && cfg && !r.startRequest) btn(bar, '补记结果', '', () => {
       details.close(); runForm(owner, cfg, db.runs.find(x => x.id === r.id) || { id: r.id, name: r.name });
@@ -984,7 +1076,7 @@ R.experiments = async c => {
         H(s, 'p', 'rpd-count', g.name + ' · ' + g.status + ' · 容差内 ' + g.withinTolerance + ' / ' + g.total + ' · 缺 ' + g.missing + ' 项');
       }
     }
-    if (rows.length) table(s, ['配置', '指标', '原文值', '实测值', '差值', '对应运行'], rows);
+    if (rows.length) expTable(s, 'original/' + item.id, ['配置', '指标', '原文值', '实测值', '差值', '对应运行'], rows);
   }
   function configSection(parent, item) {
     const list = [...configs.values()].filter(cfg => cfg.owner === item.id);
@@ -1005,7 +1097,7 @@ R.experiments = async c => {
         if (g.worstDiffs?.length) H(body, 'p', 'rpd-count', '差距最大　' + g.worstDiffs.map(d => d.metric + ' ' + num(d.delta)).join('，'));
         if (g.note) H(body, 'p', 'rpd-count', g.note);
       }
-      if (rr.length) table(body, ['运行', '状态', cfg.metric || '实测值', '与原文之差', '结果与观察'], rr.map(r => [
+      if (rr.length) expTable(body, 'config/' + cfg.id, ['运行', '状态', cfg.metric || '实测值', '与原文之差', '结果与观察'], rr.map(r => [
         el => runLink(el, r), statusOf(r), num(r.score === '' ? null : r.score),
         cfg.original !== '' && cfg.original != null && r.score !== '' && r.score != null ? expDifference(r.score, cfg.original) : '—',
         r.result || '—'
@@ -1021,7 +1113,7 @@ R.experiments = async c => {
     const s = section(parent, isPaper ? '本文引用的 Baseline 结果' : '哪些论文用了这些结果', isPaper ? '＋ 引用结果' : '引用到论文', () => citeForm(isPaper ? item : null, isPaper ? null : item));
     const uses = db.uses.filter(u => (isPaper ? u.paper : u.baseline) === item.id);
     if (!uses.length) return empty(s, '尚未登记论文引用。');
-    table(s, [isPaper ? 'Baseline' : '我的论文', '图表 / 用途', '配置 / 评测协议', '运行', '引用指标'], uses.map(u => {
+    expTable(s, 'references/' + item.id, [isPaper ? 'Baseline' : '我的论文', '图表 / 用途', '配置 / 评测协议', '运行', '引用指标'], uses.map(u => {
       const other = entities.get(isPaper ? u.baseline : u.paper), cfg = configs.get(u.config);
       return [el => {
         if (!other) return;
@@ -1034,7 +1126,7 @@ R.experiments = async c => {
     const s = section(p, '想法验证进展', '＋ 记录想法', () => ideaForm(item));
     const ideas = db.ideas.filter(i => i.owner === item.id);
     if (!ideas.length) empty(s, '记下第一个要验证的问题，随后补充证据、意外观察和下一步。');
-    else table(s, ['研究问题', '进展与当前证据', '下一步'], ideas.map(i => [
+    else expTable(s, 'ideas/' + item.id, ['研究问题', '进展与当前证据', '下一步'], ideas.map(i => [
       el => { jump(el, i.question, () => ideaForm(item, i)); if (i.note) fileLink(el, i.note, '实验笔记'); },
       el => {
         H(el, 'span', 'rpd-tag soft', i.stage); if (i.evidence) H(el, 'p', '', i.evidence);
