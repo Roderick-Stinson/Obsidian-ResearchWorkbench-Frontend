@@ -634,17 +634,22 @@ async function expOwnPapers() {
   return { papers, notices };
 }
 
+// 旧版从「＋」手工新建的论文使用 paper:UUID，引用或记录进展时也会缓存其他来源的论文。
+function expPaperJoined(e) {
+  return e.kind === 'paper' && (e.joined === true || /^paper:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(e.id));
+}
+
 function expModel(db, folders, own, groups, inbox) {
   const entities = new Map(db.entities.map(e => [e.id, e]));
   const configs = new Map(db.configs.map(c => [c.id, c]));
   const runs = new Map(db.runs.map(r => [r.id, r]));
   folders.forEach(f => {
     const id = expKey('folder', f.path);
-    entities.set(id, { id, kind: 'paper', title: f.name, folder: f.path });
+    if (!entities.has(id)) entities.set(id, { id, kind: 'paper', title: f.name, folder: f.path });
   });
   own.forEach(p => {
     const id = expKey('paper', p.id);
-    entities.set(id, { id, kind: 'paper', title: p.titleZh || p.title || p.id, source: p.urls?.source || '' });
+    if (!entities.has(id)) entities.set(id, { id, kind: 'paper', title: p.titleZh || p.title || p.id, source: p.urls?.source || '' });
   });
   groups.forEach(g => {
     const id = g.paper ? expKey('source', g.paper.id) : expKey('method-group', g.id);
@@ -671,10 +676,12 @@ R.experiments = async c => {
   const folders = (app.vault.getAbstractFileByPath(OWN_DIR.slice(0, -1))?.children || []).filter(f => Array.isArray(f.children));
   const { entities, configs, runs } = expModel(db, folders, own.papers, repro.data?.reproGroups || [], inbox.data?.runs || []);
   const items = [...entities.values()].sort((a, b) => a.title.localeCompare(b.title, 'zh-CN', { numeric: true }));
-  const papers = items.filter(e => e.kind === 'paper'), baselines = items.filter(e => e.kind === 'baseline');
+  const joined = new Set(db.entities.filter(expPaperJoined).map(e => e.id));
+  const papers = items.filter(e => joined.has(e.id)), baselines = items.filter(e => e.kind === 'baseline');
+  const candidates = items.filter(e => e.kind === 'paper' && !joined.has(e.id));
   const stateKey = app.vault.getName() + '/' + TAB_KEY;
   const selection = window.__rpdExperimentSelection ||= {};
-  let selected = entities.get(selection[stateKey]) || papers[0] || baselines[0];
+  let selected = [...papers, ...baselines].find(e => e.id === selection[stateKey]) || papers[0] || baselines[0];
   const select = id => { selection[stateKey] = id; selected = entities.get(id); draw(); };
   const save = async (change, next) => {
     await expSave(change);
@@ -698,17 +705,33 @@ R.experiments = async c => {
 
   function addEntity(kind) {
     const isPaper = kind === 'paper';
-    expForm(isPaper ? '新建论文项目' : '登记复现的 Baseline', [
-      field('title', isPaper ? '论文名称' : '方法名称', { required: true }),
-      field('source', '原论文链接', { type: 'url' }),
-      ...(isPaper ? [] : [field('repo', '开源仓库链接', { type: 'url' })])
-    ], async v => {
-      const e = { id: expKey(kind, expId()), kind, title: v.title, source: expWebUrl(v.source), repo: expWebUrl(v.repo) };
+    const fields = [];
+    if (isPaper && candidates.length) {
+      const options = candidates.map(e => [e.id, (e.folder ? '项目文件夹 · ' : '本人论文 · ') + e.title]);
+      fields.push(field('existing', '选择已有项目或新建', { options: [['', '新建论文项目'], ...options] }));
+    }
+    fields.push(field('title', isPaper ? '论文名称' : '方法名称', { required: true }), field('source', '原论文链接', { type: 'url' }));
+    if (!isPaper) fields.push(field('repo', '开源仓库链接', { type: 'url' }));
+    const inputs = expForm(isPaper ? '加入我的论文' : '登记复现的 Baseline', fields, async v => {
+      const candidate = isPaper ? entities.get(v.existing) : null;
+      const e = { ...candidate, id: candidate?.id || expKey(kind, expId()), kind, title: v.title, source: expWebUrl(v.source) };
+      if (isPaper) e.joined = true; else e.repo = expWebUrl(v.repo);
       await save(d => {
-        if ([...items, ...d.entities].some(x => x.kind === kind && x.title === e.title)) throw new Error('同名条目已存在，请在左栏选择它');
-        expRemember(d, e);
+        const listed = isPaper ? d.entities.filter(expPaperJoined) : [...baselines, ...d.entities.filter(x => x.kind === 'baseline')];
+        if (listed.some(x => x.id === e.id || x.title === e.title)) throw new Error('条目已存在，请在左栏选择它');
+        const previous = d.entities.find(x => x.id === e.id);
+        if (previous) Object.assign(previous, e); else d.entities.push(e);
       }, e.id);
-    });
+    }, isPaper ? '加入' : '保存');
+    if (inputs.existing) {
+      let draft = { title: '', source: '' }, last = '';
+      inputs.existing.addEventListener('change', () => {
+        if (!last) draft = { title: inputs.title.value, source: inputs.source.value };
+        last = inputs.existing.value;
+        const next = entities.get(last) || draft;
+        inputs.title.value = next.title; inputs.source.value = next.source || '';
+      });
+    }
   }
 
   function ideaForm(paper, idea) {
@@ -873,7 +896,11 @@ R.experiments = async c => {
     if (!uses.length) return empty(s, '尚未登记论文引用。');
     table(s, [isPaper ? 'Baseline' : '我的论文', '图表 / 用途', '配置 / 评测协议', '运行', '引用指标'], uses.map(u => {
       const other = entities.get(isPaper ? u.baseline : u.paper), cfg = configs.get(u.config);
-      return [el => other && jump(el, other.title, () => select(other.id)), u.place, [cfg?.name, cfg?.protocol].filter(Boolean).join(' · ') || '—', el => runLink(el, runs.get(u.run)), u.metric || '—'];
+      return [el => {
+        if (!other) return;
+        if (other.kind === 'paper' && !joined.has(other.id)) H(el, 'span', '', other.title);
+        else jump(el, other.title, () => select(other.id));
+      }, u.place, [cfg?.name, cfg?.protocol].filter(Boolean).join(' · ') || '—', el => runLink(el, runs.get(u.run)), u.metric || '—'];
     }));
   }
   function paperView(p, item) {
@@ -907,8 +934,8 @@ R.experiments = async c => {
     for (const [kind, title, entries] of [['paper', '我的论文', papers], ['baseline', '我复现的 Baseline', baselines]]) {
       const group = H(nav, 'section'); const h = H(group, 'div', 'rpd-exp-heading'); H(h, 'h3', '', title);
       const plus = btn(h, '＋', 'rpd-ghost', () => addEntity(kind)); plus.setAttribute('aria-label', '添加' + (kind === 'paper' ? '论文' : 'Baseline'));
-      if (!entries.length) H(group, 'p', 'rpd-muted', '尚无条目');
-      entries.forEach(e => { const b = btn(group, e.title, 'rpd-exp-navitem', () => select(e.id)); b.setAttribute('aria-current', String(e.id === selected?.id)); });
+      if (!entries.length) H(group, 'p', 'rpd-muted', kind === 'paper' ? '尚未加入论文' : '尚无条目');
+      entries.forEach(e => { const b = btn(group, e.title, 'rpd-exp-navitem', () => select(e.id)); b.title = e.title; b.setAttribute('aria-current', String(e.id === selected?.id)); });
     }
     const p = H(workspace, 'div', 'rpd-exp-detail');
     if (selected) {
