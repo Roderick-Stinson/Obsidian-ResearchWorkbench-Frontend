@@ -1,5 +1,7 @@
 // 论文工作台 · 单面板。数据来自后端接口（约定见 论文工作台/后端约定/数据格式约定.md）；vault 里只读写阅读笔记和面板配置。
-const DIR = input?.componentDir || [dv.current().file.folder, '面板组件'].filter(Boolean).join('/');
+const CURRENT_PATH = dv.current()?.file?.path || dv.currentFilePath || '';
+const CURRENT_FOLDER = dv.current()?.file?.folder ?? (CURRENT_PATH.includes('/') ? CURRENT_PATH.slice(0, CURRENT_PATH.lastIndexOf('/')) : '');
+const DIR = input?.componentDir || [CURRENT_FOLDER, '面板组件'].filter(Boolean).join('/');
 const CONFIG_FILE = DIR + '/config.json';
 const root = dv.container.createDiv({ cls: 'rpd-root' });
 let disposed = false;
@@ -39,7 +41,7 @@ const star = (p, n, set, label) => {
 };
 const obsidian = (() => { try { return require('obsidian'); } catch (e) { return null; } })();
 async function renderMd(el, markdown) {
-  if (obsidian?.MarkdownRenderer) { try { await obsidian.MarkdownRenderer.render(app, markdown, el, dv.current().file.path, dv.component || new obsidian.Component()); return; } catch (e) {} }
+  if (obsidian?.MarkdownRenderer) { try { await obsidian.MarkdownRenderer.render(app, markdown, el, CURRENT_PATH, dv.component || new obsidian.Component()); return; } catch (e) {} }
   H(el, 'pre', 'rpd-md-plain', markdown);
 }
 
@@ -469,11 +471,11 @@ function addPaperForm(parent, mark) {
 
 // ---------- 页签状态 ----------
 // Dataview 在 vault 里任何笔记变了（Dropbox 同步、笔记同步写回等）都会重新运行整段脚本，页签状态会丢；
-// 所以把当前页签记在 window 上（按笔记路径分开），重新运行时接着用，不会被弹回起始页签。
-const TAB_KEY = dv.current().file.path;
+// 所以把当前页签和各页签的筛选 / 搜索 / 分页状态记在 window 上（按笔记路径分开），重新运行时接着用，不会重置。
+const TAB_KEY = CURRENT_PATH;
 window.__rpdTab = window.__rpdTab || {};
 let tab = window.__rpdTab[TAB_KEY] || (input?.page === 'research' ? 'research' : 'home');
-const T = {
+const DEFAULT_T = () => ({
   issue: { date: null, q: '', domain: undefined },
   watched: { q: '', status: '全部' },
   teams: { q: '' },
@@ -484,7 +486,15 @@ const T = {
   res: { cat: null, full: false, abl: false, view: '效果' },
   hot: { platform: '全部' },
   research: { origin: 'all' }
-};
+});
+window.__rpdState = window.__rpdState || {};
+const T = (() => {
+  const def = DEFAULT_T();
+  const saved = window.__rpdState[TAB_KEY];
+  if (!saved) return (window.__rpdState[TAB_KEY] = def);
+  for (const [k, v] of Object.entries(def)) saved[k] = { ...v, ...(saved[k] || {}) };
+  return saved;
+})();
 
 // ---------- 各页签（都是异步的：先取数据再画） ----------
 const R = {};
@@ -2270,24 +2280,57 @@ const nav = H(root, 'nav', 'rpd-nav');
 const NAV = [['home', '首页'], ['experiments', '实验记录'], ['issue', '论文推荐'], ['watched', '关注论文'], ['teams', '团队'], ['lib', '论文库'], ['schemes', '分类'], ['must', '经典与必读'], ['map', '领域发展史'], ['hot', '热点'], ['res', '结果表'], ['idea', 'IDEA'], ['research', '我的研究领域'], ['rep', '报告'], ['inbox', '待认领'], ['set', '设置']];
 const content = H(root, 'main', 'rpd-content');
 toastEl = document.body.createDiv({ cls: 'rpd-toast' });
-function goTab(next) { tab = next; window.__rpdTab[TAB_KEY] = next; render(); }
-let renderSeq = 0, renderedTab = null;
+function goTab(next) {
+  if (next !== tab) window.__rpdScroll[TAB_KEY] = { tab: next, top: 0 };
+  tab = next;
+  window.__rpdTab[TAB_KEY] = next;
+  render();
+}
+let renderSeq = 0, renderedTab = null, scrollEl = null, rendering = false;
 // 页面滚动的那一层（Obsidian 的阅读视图），重画页面前后记住、恢复滚动位置；
 // Dataview 重新运行整段脚本时（新实例）也接着上次的位置，不会弹回页首。
 function scroller() { for (let el = root.parentElement; el; el = el.parentElement) { if (el.scrollHeight > el.clientHeight && /(auto|scroll)/.test(getComputedStyle(el).overflowY)) return el; } return null; }
 window.__rpdScroll = window.__rpdScroll || {};
+const onScroll = () => {
+  if (disposed || rendering || !root.isConnected || renderedTab !== tab || !scrollEl) return;
+  if (scrollEl.scrollHeight <= scrollEl.clientHeight + 20 || root.getClientRects().length === 0) return;
+  window.__rpdScroll[TAB_KEY] = { tab, top: scrollEl.scrollTop };
+};
+function bindScroll(el) {
+  if (scrollEl === el) return;
+  scrollEl?.removeEventListener('scroll', onScroll);
+  scrollEl = el;
+  if (scrollEl) scrollEl.addEventListener('scroll', onScroll, { passive: true });
+}
 async function render() {
   const seq = ++renderSeq;
-  const sp = scroller(), keepTop = sp && renderedTab === tab ? sp.scrollTop : (window.__rpdScroll[TAB_KEY]?.tab === tab && renderedTab === null ? window.__rpdScroll[TAB_KEY].top : 0);
+  const sp = scroller();
+  const savedTop = window.__rpdScroll[TAB_KEY]?.tab === tab ? window.__rpdScroll[TAB_KEY].top : 0;
+  const keepTop = renderedTab === tab ? (sp ? sp.scrollTop : savedTop) : (renderedTab === null ? savedTop : 0);
   titleEl.setText(tab === 'research' ? '我的研究领域' : '实验工作台 · 论文');
   nav.empty(); NAV.forEach(([k, l]) => { const b = H(nav, 'button', 'rpd-navbtn' + (tab === k ? ' is-active' : ''), l); b.type = 'button'; b.addEventListener('click', () => goTab(k)); });
   const next = createDiv({ cls: 'rpd-page' });
   const loading = content.childElementCount ? null : H(content, 'p', 'rpd-muted', '加载中…');
   try { await R[tab](next); } catch (e) { empty(next, '页面出错：' + e.message); console.error(e); }
   if (seq !== renderSeq || disposed) return;
-  loading?.remove(); content.empty(); content.appendChild(next); updateStatus();
-  renderedTab = tab;
-  const sp2 = scroller(); if (sp2) { sp2.scrollTop = keepTop; if (!sp2.__rpdBound) { sp2.__rpdBound = true; sp2.addEventListener('scroll', () => { window.__rpdScroll[TAB_KEY] = { tab, top: sp2.scrollTop }; }, { passive: true }); } }
+  rendering = true;
+  try {
+    loading?.remove(); content.empty(); content.appendChild(next); updateStatus();
+    renderedTab = tab;
+    const sp2 = scroller();
+    bindScroll(sp2);
+    if (sp2) {
+      sp2.scrollTop = keepTop;
+      if (keepTop > 0 && sp2.scrollTop === 0) {
+        requestAnimationFrame(() => {
+          if (!disposed && root.isConnected && renderedTab === tab && sp2.scrollTop === 0) sp2.scrollTop = keepTop;
+        });
+      }
+      window.__rpdScroll[TAB_KEY] = { tab, top: sp2.scrollTop === 0 && keepTop > 0 ? keepTop : sp2.scrollTop };
+    }
+  } finally {
+    rendering = false;
+  }
 }
 await Promise.all([loadNotes(), loadExperiments()]);
 try { const h = await http('GET', '/health'); TASK_TYPES = h.taskTypes || null; TZ_NAME = h.timezone || undefined; } catch (e) {}
@@ -2311,7 +2354,7 @@ const refreshExperimentDesk = e => {
 window.addEventListener('rpd-experiments-saved', refreshExperimentDesk);
 let expChecking = false;
 const expRefreshTimer = setInterval(async () => {
-  if (disposed || expChecking || document.hidden || tab !== 'experiments') return;
+  if (disposed || expChecking || document.hidden || tab !== 'experiments' || !root.isConnected || root.getClientRects().length === 0) return;
   expChecking = true;
   try {
     const { revision } = await http('GET', '/experiment-desk/revision');
@@ -2319,5 +2362,17 @@ const expRefreshTimer = setInterval(async () => {
   } catch (_) { /* 面板保留最后一次读取到的记录。 */ }
   finally { expChecking = false; }
 }, 12000);
-const observer = new MutationObserver(() => { if (!root.isConnected) { disposed = true; clearInterval(expRefreshTimer); app.metadataCache.offref(ref); window.removeEventListener('rpd-experiments-saved', refreshExperimentDesk); observer.disconnect(); toastEl.remove(); } });
+const observer = new MutationObserver(() => {
+  if (!root.isConnected) {
+    disposed = true;
+    clearInterval(expRefreshTimer);
+    clearTimeout(localTimer);
+    clearTimeout(syncTimer);
+    bindScroll(null);
+    app.metadataCache.offref(ref);
+    window.removeEventListener('rpd-experiments-saved', refreshExperimentDesk);
+    observer.disconnect();
+    toastEl.remove();
+  }
+});
 observer.observe(document.body, { childList: true, subtree: true });

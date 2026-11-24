@@ -80,7 +80,7 @@
 
 ## 常见问题
 
-**面板自己重新加载，滚动回到页首。** 面板是一段 Dataview 代码块，Dataview 默认开着“自动刷新视图”：vault 里任何笔记一变（Dropbox 同步、别的插件写文件、你在别处改笔记），它就把整个面板重新运行一遍。面板会记住当前页签和滚动位置，重载后回到原处，但还是会闪一下，设置页里没点保存的输入也会丢。想彻底避免：「设置 → 第三方插件 → Dataview」里关掉 Automatic View Refreshing，或把 Refresh Interval 调大（比如 60 秒），然后重开面板。关掉后面板仍会自己刷新阅读笔记和实验记录的变化，各页面也有“刷新”按钮；副作用是 vault 里其他笔记里的 Dataview 查询也不再自动更新。
+**面板自己重新加载，滚动回到页首。** 面板是一段 Dataview 代码块，Dataview 默认开着“自动刷新视图”：vault 里任何笔记一变（Dropbox 同步、别的插件写文件、你在别处改笔记），它就把整个面板重新运行一遍。特别是 Custom Attachment Location 17.x 默认每隔 60 秒向 `Plugin data/.../have.md` 写入同步心跳，即使把 Refresh Interval 调到 60 秒也仍会每 1～3 分钟触发一次重跑。面板现在会在内存中保留页签、筛选条件和滚动位置，启动时也会等待 Dataview 索引就绪；要彻底避免无故重闪，请到「设置 → 第三方插件 → Dataview」里关掉 Automatic View Refreshing，然后重开 Obsidian 或重新打开面板。关掉后面板仍会自己刷新阅读笔记和实验记录的变化，各页面也有“刷新”按钮；副作用是 vault 里其他笔记里的 Dataview 查询也不再自动更新。
 
 ## 面板会读写 vault 里的哪些地方
 
