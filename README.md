@@ -1,8 +1,8 @@
 # 论文工作台 · Obsidian 面板
 
-> An Obsidian (Dataview) dashboard for a local research-paper workbench: daily paper recommendations (arXiv + Hugging Face Daily Papers) with briefs, paper library, your marks and reading queue, interest keyword tree, classics and must-reads, field history and per-stream hotspot trends. All data comes from the backend at [Obsidian-ResearchWorkbench-Backend](https://github.com/Roderick-Stinson/Obsidian-ResearchWorkbench-Backend). Docs are in Chinese.
+> An Obsidian (Dataview) dashboard for a local research-paper workbench: daily paper recommendations (arXiv + Hugging Face Daily Papers) with briefs, paper library, your marks and reading queue, interest keyword tree, classics and must-reads, field history and per-stream hotspot trends, and a data-driven experiment workbench synced with coding-agent MCP sessions. All data comes from the backend at [Obsidian-ResearchWorkbench-Backend](https://github.com/Roderick-Stinson/Obsidian-ResearchWorkbench-Backend). Docs are in Chinese.
 
-面板只负责展示，数据都来自本机的后端服务（[Obsidian-ResearchWorkbench-Backend](https://github.com/Roderick-Stinson/Obsidian-ResearchWorkbench-Backend)）。论文和 PDF 都存在后端；vault 里只保存阅读笔记、实验记录和面板配置。
+面板只负责展示，论文、PDF、实验工作台记录与运行结果都存在本机的后端服务（[Obsidian-ResearchWorkbench-Backend](https://github.com/Roderick-Stinson/Obsidian-ResearchWorkbench-Backend)）；vault 里保存阅读笔记、Markdown 实验笔记、面板配置与可选的本地图解脚本。
 
 ## 安装
 
@@ -73,10 +73,21 @@
 - 笔记会同步给后端，推荐时参考（后端不读 vault，由面板按小节发过去）：精读过的、面板上打了 4 星以上的论文当邻近推荐的种子，“要追的论文”里的链接加进阅读队列，“和我的研究的关系”“想法与疑问”整理成阅读要点（在“我的研究领域”里看）。`我的论文/` 下的、frontmatter 写了 `sync: false` 的不发；贴进笔记的图片也不发，图下面写的说明照发。改了这三节的标题，到“设置 → 每日推荐 → 阅读笔记”里改成一样的。
 - `paper_id` 可以填 arXiv / OpenReview 链接，同步后换成论文 ID。
 - 笔记的 `status` 只有 待读 / 粗读 / 精读 三个，在论文卡片的「阅读状态」下拉框里选，写回笔记的 frontmatter。评分只在面板上打星，笔记里不写 `rating`。
-- “报告”页：每周一凌晨自动生成上一周的周报（“设置 → 每日推荐”里可以关），也可以点“生成本周周报”随时生成。报告分两部分——这周你的研究领域有什么进展（取每日简报里的精选论文，用大模型归纳，每个结论带引用）、你这周做了什么（只统计后端有记录的阅读笔记、打分、标记和生成的精读，不让大模型写）。实验记录和 `我的论文/` 里的内容不在后端，不统计。
+- “报告”页：每周一凌晨自动生成上一周的周报（“设置 → 每日推荐”里可以关），也可以点“生成本周周报”随时生成。报告分两部分——这周你的研究领域有什么进展（取每日简报里的精选论文，用大模型归纳，每个结论带引用）、你这周做了什么（只统计后端有记录的阅读笔记、打分、标记和生成的精读，不让大模型写）。实验工作台记录和 `我的论文/` 里的文稿不计入该统计，也不会上传大模型。
 - 论文库有两个搜索框：左边按主题搜（标题、摘要、速读），右边按作者搜。作者搜只看作者名，不分大小写和重音，几个词要落在同一位作者身上（“Guibin Zhang”不会匹配 Guibin Li 和 Wei Zhang 合著的论文），两个框可以一起用；点卡片上的第一作者名字，就是搜这位作者的论文。
 - 论文库按「读没读过」筛选：笔记是精读的算精读，笔记是粗读或打过星的算粗读，其余算未读。读过的（粗读及以上或打过星）会自动移出阅读队列；论文库里勾「只看阅读队列」看还没读的。
 - 想在 Obsidian 里直接新建笔记，把“设置 → 模板 → 模板文件夹位置”设成 `论文工作台/模板`，再用“模板：插入模板”，`paper_id` 手动填。
+
+## 实验工作台
+
+顶栏采用两级分组导航（「每日追踪 / 论文管理 / 领域知识 / 实验工作台 / 研究与设置」），进入 **实验工作台 → 实验记录** 后可按「我的论文」和「复现的 Baseline」管理实验全过程，支持左栏宽度拖拽与「隐藏左栏 / 显示左栏」切换，以及表格表头列宽拖拽调整。
+
+所有论文、命题与实验数据均存放在后端 `experiment-desk`（[后端仓库 README](https://github.com/Roderick-Stinson/Obsidian-ResearchWorkbench-Backend#实验工作台与-mcp-交接)），面板本身保持 100% 开源通用、不硬编码任何私有论文内容，并根据后端数据自动切换视图层次：
+
+- **通用模式**：只需新建研究问题（`RQ1 · ...`）、验证命题、实验配置、运行记录和 Baseline 引用，即可使用 **KPI 概览**、**命题与结论**、**实验配置与运行** 与 **Baseline 引用**；
+- **结构化增强模式（可选）**：当论文通过后端或 Coding Agent MCP 写入 `entity.display`（总览与推进顺序）、`claim`/`todo` 扩展字段、`expCode` / `phase` / `guide`（实验设计指南与预跑折叠）以及 `run.display`（摘要对比行、`matrix` 对照矩阵、`tables` 消融表）时，自动呈现验证路线图、分步证据链、待补实验清单与实验明细审计；
+- **可选本地自定义图解（`面板组件/exp-custom.js`）**：若单篇论文需要定制化的动态 SVG 图解，可在本地 Vault 编写 `论文工作台/面板组件/exp-custom.js`（返回 `{ renderDiagram(expCode, metrics, item) }`）。`.gitignore` 已默认忽略 `exp-custom.js` 与 `config.json`，不会将私有可视化或本地配置提交到 GitHub；
+- **静默版本轮询**：打开实验页时面板每几秒仅请求一次轻量的 `GET /experiment-desk/revision`，只有后端版本号变化时才局部重绘，不触发整页闪烁。
 
 ## 常见问题
 
@@ -87,9 +98,10 @@
 - `论文阅读/论文笔记整理/`（以及带 `#paper` 标签的笔记）：阅读笔记，frontmatter 里的 `paper_id` 关联到后端的论文。在面板上点“建阅读笔记”“存为阅读笔记”时新建；面板读出内容同步给后端，并会改写 `paper_id`（换成论文 ID）；
 - `实验记录/`：在面板上“新建实验记录”时新建；
 - `论文工作台/模板/`：只读，“建阅读笔记”用的模板；
-- `论文工作台/面板组件/config.json`：后端地址、token 和模板路径。
+- `论文工作台/面板组件/config.json`：后端地址、token 和模板路径；
+- `论文工作台/面板组件/exp-custom.js`：只读（可选），用于挂载特定论文的本地动态 SVG 图解扩展（已被 `.gitignore` 忽略）。
 
-除此之外不读写 vault；论文条目和 PDF 都不在 vault 里。
+除此之外不读写 vault；论文条目、PDF 与实验台主数据都在后端。
 
 ## 接口约定
 
@@ -97,11 +109,13 @@
 
 ## 开发
 
-面板代码在 vault 里直接改、在 Obsidian 里看效果；改完用脚本同步进这个仓库再提交：
+面板代码可在 vault 里直接改并在 Obsidian 里实时查看效果（但请把特定论文的自定义 SVG 放在 `exp-custom.js` 中，保持 `view.js` 通用）；改完可用脚本同步回本仓库再提交：
 
 ```bash
 ./sync_from_vault.sh <你的 vault 路径>
 ```
+
+（`.gitignore` 已忽略 `config.json` 与 `exp-custom.js`，只同步通用面板组件与文档约定。）
 
 ## 许可证
 
