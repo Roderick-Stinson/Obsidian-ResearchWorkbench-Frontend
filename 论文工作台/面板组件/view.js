@@ -155,7 +155,9 @@ function jobsPanel(parent, res) {
 }
 
 // ---------- 我的标记（评分、标记、相关性、关注、阅读队列） ----------
-const FLAGS = ['已读', '收藏', '复现'];
+const FLAGS = ['已读', '收藏', '复现', '代码可完整复现', '代码不完整'];
+const CODE_FLAGS = ['代码可完整复现', '代码不完整'];
+const BASELINE_FLAG = '提供基线复现';
 // 讨论状态由我自己定义，后端原样保存。
 const DISCUSSION = ['参考论文', '待讨论', '讨论中', '已读', '初读完成', '已收敛', '待回访'];
 let queueIds = null;
@@ -173,7 +175,10 @@ async function addToQueue(id) {
 function userControls(bar, paper, redraw) {
   const u = paper.user;
   star(bar, u.rating, v => patchUser(paper, { rating: v }, async () => { await loadQueue(); redraw(); }), '我的评价');  // 打了分就移出阅读队列
-  FLAGS.forEach(k => { const on = u.flags.includes(k); chip(bar, k, on, () => patchUser(paper, { flags: on ? u.flags.filter(f => f !== k) : [...u.flags, k] }, redraw)); });
+  FLAGS.forEach(k => { const on = u.flags.includes(k); chip(bar, k, on, () => {
+    const next = on ? u.flags.filter(f => f !== k) : [...u.flags.filter(f => !CODE_FLAGS.includes(f) || !CODE_FLAGS.includes(k)), k];
+    patchUser(paper, { flags: next }, redraw);
+  }); });
   ['相关', '不相关'].forEach(k => chip(bar, k, u.relevance === k, () => patchUser(paper, { relevance: u.relevance === k ? null : k }, redraw)));
   chip(bar, u.watched ? '已重点关注' : '重点关注', u.watched, () => patchUser(paper, { watched: !u.watched }, redraw));
 }
@@ -513,33 +518,17 @@ R.home = async c => {
   [['论文库总数', num(o?.paperTotal), '后端论文库'], ['与我相关', num(o?.relevantTotal), '检索判定为核心相关或相关'], ['今日新收录', num(b?.newCount), b ? b.date : '—'], ['今日精选', num(b?.pickedCount), b ? b.date : '—'], ['精读', deep, '粗读 ' + skimmed + ' 篇'], ['阅读进度', rate, '精读 + 粗读 ' + (deep + skimmed) + ' / 论文库 ' + total]]
     .forEach(([name, value, hint]) => { const box = H(stats, 'div', 'rpd-stat'); H(box, 'span', 'rpd-stat-l', name); H(box, 'span', 'rpd-stat-n', value); H(box, 'span', 'rpd-stat-hint', hint); });
 
-  const daily = H(c, 'section', 'rpd-overview-panel'); H(H(daily, 'div', 'rpd-panel-head'), 'h3', '', '每日研究简报');
-  if (shown(daily, brief, '每日简报')) {
-    if (b.summary) H(daily, 'p', 'rpd-brief-intro', b.summary);
-    b.highlights.forEach(item => {
-      const entry = H(daily, 'div', 'rpd-brief-item'); H(entry, 'strong', '', item.title); H(entry, 'p', 'rpd-sum', item.text);
-      const line = H(entry, 'div', 'rpd-brief-sources'); H(line, 'span', 'rpd-muted', '相关论文：'); item.sources.forEach((ref, i) => { paperRef(line, ref); if (i < item.sources.length - 1) H(line, 'span', 'rpd-muted', ' · '); });
-    });
-    if (b.weekly) { const w = H(daily, 'div', 'rpd-brief-weekly'); H(w, 'strong', '', '本周脉络'); H(w, 'p', 'rpd-sum', b.weekly.summary); H(w, 'span', 'rpd-muted', '来源：' + b.weekly.period.start + ' 至 ' + b.weekly.period.end + ' 周报'); }
-  }
-  if (b?.accepted?.length) {
-    const acc = H(c, 'section', 'rpd-overview-panel'); const ah0 = H(acc, 'div', 'rpd-panel-head'); H(ah0, 'h3', '', '新中稿'); H(ah0, 'span', 'rpd-progress-value', b.accepted.length + ' 篇');
-    H(acc, 'p', 'rpd-muted', '“中稿了”是论文库里的预印本查到了正式发表记录；“新入库”是每周按你的检索方向查到的新中稿论文，已直接进论文库。');
-    const list = b.accepted.length > 6 ? H(acc, 'details', 'rpd-home-more') : acc; if (list !== acc) H(list, 'summary', '', '展开全部');
-    b.accepted.forEach(a => { const row = H(list, 'div', 'rpd-row'); H(row, 'span', 'rpd-tag ' + (a.kind === 'new' ? 'accent' : 'good'), a.kind === 'new' ? '新入库' : '中稿了'); paperRef(H(row, 'span', 'rpd-row-t'), a.paper); H(row, 'span', 'rpd-muted', a.venue); });
-  }
+  // 1. 今日最该先看：精选论文 + 阅读队列
   if (b) {
     const picks = H(c, 'section', 'rpd-overview-panel'); const ph = H(picks, 'div', 'rpd-panel-head'); H(ph, 'h3', '', '今日精选'); H(ph, 'span', 'rpd-progress-value', b.pickedCount + ' 篇');
     if (!b.picks.length) empty(picks, '今天暂无精选论文。');
     b.picks.forEach(p => { const row = H(picks, 'div', 'rpd-home-paper'); paperRef(row, p); if (p.titleZh && p.titleZh !== p.title) H(row, 'div', 'rpd-zh', p.titleZh); if (p.reason) H(row, 'p', 'rpd-muted', '入选理由：' + p.reason); if (p.summary) H(row, 'p', 'rpd-sum', p.summary); });
     btn(picks, '查看完整论文推荐', 'rpd-ghost', () => goTab('issue'));
-    get('/recommendations/backlog').then(r => { if (r.data?.total) { const p = H(picks, 'p', 'rpd-muted', '另外还有 ' + r.data.total + ' 篇之前的精选你没看，在“论文推荐”页顶上。'); } });
-    const added = H(c, 'section', 'rpd-overview-panel'); const ah = H(added, 'div', 'rpd-panel-head'); H(ah, 'h3', '', '今日新收录论文'); H(ah, 'span', 'rpd-progress-value', b.newCount + ' 篇');
-    if (!b.todayNew.length) empty(added, '今天暂无新收录论文。');
-    else { const list = H(added, 'details', 'rpd-home-more'); H(list, 'summary', '', '展开今日论文'); b.todayNew.forEach((p, i) => { const row = H(list, 'div', 'rpd-home-paper'); const hd = H(row, 'div', 'rpd-home-paper-head'); H(hd, 'span', 'rpd-home-index', String(i + 1).padStart(2, '0')); const body = H(hd, 'div', 'rpd-home-paper-body'); paperRef(body, p); if (p.titleZh && p.titleZh !== p.title) H(body, 'div', 'rpd-zh', p.titleZh); if (p.summary) H(body, 'p', 'rpd-sum', p.summary); if (p.publishedAt) H(body, 'span', 'rpd-muted', '发表：' + p.publishedAt); }); }
+    get('/recommendations/backlog').then(r => { if (r.data?.total) { H(picks, 'p', 'rpd-muted', '另外还有 ' + r.data.total + ' 篇之前的精选你没看，在“论文推荐”页顶上。'); } });
   }
 
-  const queue = H(c, 'details', 'rpd-overview-panel rpd-home-alerts'); H(queue, 'summary', '', '阅读队列 · ' + queueIds.length + ' 篇');
+  const queue = H(c, 'details', 'rpd-overview-panel rpd-home-alerts'); if (queueIds.length) queue.open = true;
+  H(queue, 'summary', '', '阅读队列 · ' + queueIds.length + ' 篇');
   if (!queueIds.length) empty(queue, '阅读队列为空。');
   const queued = await Promise.all(queueIds.map(id => get('/papers/' + enc(id))));
   queued.forEach((res, i) => {
@@ -549,10 +538,36 @@ R.home = async c => {
     btn(row, '移出', 'rpd-ghost', async () => { const q = await act(() => http('PUT', '/me/queue', { body: { paperIds: queueIds.filter(x => x !== queueIds[i]) } })); if (q) { queueIds = q.paperIds; render(); } });
   });
 
+  // 2. 今日展开信息：每日简报、新中稿、今日新收录（默认收起，保持首屏清爽）
+  const daily = H(c, 'details', 'rpd-overview-panel rpd-home-alerts');
+  H(daily, 'summary', '', '每日研究简报' + (b?.highlights?.length ? ' · ' + b.highlights.length + ' 条要点' : ''));
+  if (shown(daily, brief, '每日简报')) {
+    if (b.summary) H(daily, 'p', 'rpd-brief-intro', b.summary);
+    b.highlights.forEach(item => {
+      const entry = H(daily, 'div', 'rpd-brief-item'); H(entry, 'strong', '', item.title); H(entry, 'p', 'rpd-sum', item.text);
+      const line = H(entry, 'div', 'rpd-brief-sources'); H(line, 'span', 'rpd-muted', '相关论文：'); item.sources.forEach((ref, i) => { paperRef(line, ref); if (i < item.sources.length - 1) H(line, 'span', 'rpd-muted', ' · '); });
+    });
+    if (b.weekly) { const w = H(daily, 'div', 'rpd-brief-weekly'); H(w, 'strong', '', '本周脉络'); H(w, 'p', 'rpd-sum', b.weekly.summary); H(w, 'span', 'rpd-muted', '来源：' + b.weekly.period.start + ' 至 ' + b.weekly.period.end + ' 周报'); }
+  }
+  if (b?.accepted?.length) {
+    const acc = H(c, 'details', 'rpd-overview-panel rpd-home-alerts');
+    H(acc, 'summary', '', '新中稿 · ' + b.accepted.length + ' 篇');
+    H(acc, 'p', 'rpd-muted', '“中稿了”是论文库里的预印本查到了正式发表记录；“新入库”是每周按你的检索方向查到的新中稿论文，已直接进论文库。');
+    b.accepted.forEach(a => { const row = H(acc, 'div', 'rpd-row'); H(row, 'span', 'rpd-tag ' + (a.kind === 'new' ? 'accent' : 'good'), a.kind === 'new' ? '新入库' : '中稿了'); paperRef(H(row, 'span', 'rpd-row-t'), a.paper); H(row, 'span', 'rpd-muted', a.venue); });
+  }
+  if (b) {
+    const added = H(c, 'details', 'rpd-overview-panel rpd-home-alerts');
+    H(added, 'summary', '', '今日新收录论文 · ' + b.newCount + ' 篇');
+    if (!b.todayNew.length) empty(added, '今天暂无新收录论文。');
+    else b.todayNew.forEach((p, i) => { const row = H(added, 'div', 'rpd-home-paper'); const hd = H(row, 'div', 'rpd-home-paper-head'); H(hd, 'span', 'rpd-home-index', String(i + 1).padStart(2, '0')); const body = H(hd, 'div', 'rpd-home-paper-body'); paperRef(body, p); if (p.titleZh && p.titleZh !== p.title) H(body, 'div', 'rpd-zh', p.titleZh); if (p.summary) H(body, 'p', 'rpd-sum', p.summary); if (p.publishedAt) H(body, 'span', 'rpd-muted', '发表：' + p.publishedAt); });
+  }
+
+  // 3. 系统状态：后台任务、实验与流程告警、流程明细（只在有运行中/告警时默认展开）
   jobsPanel(c, jobs);
   const flagged = experiments.filter(e => ALERT_STATUS.includes(e.status));
   const attention = pipeline.data?.attention || [];
-  const alerts = H(c, 'details', 'rpd-overview-panel rpd-home-alerts'); H(alerts, 'summary', '', '实验与流程状态 · ' + (flagged.length + attention.length) + ' 项待关注');
+  const alerts = H(c, 'details', 'rpd-overview-panel rpd-home-alerts'); if (flagged.length + attention.length) alerts.open = true;
+  H(alerts, 'summary', '', '实验与流程状态 · ' + (flagged.length + attention.length) + ' 项待关注');
   flagged.forEach(e => { const row = H(alerts, 'div', 'rpd-row'); fileLink(row, e.path, e.title); H(row, 'span', 'rpd-tag warn', e.status); H(row, 'span', 'rpd-muted', e.server); });
   attention.forEach(item => { const row = H(alerts, 'div', 'rpd-row'); H(row, 'span', 'rpd-tag ' + (item.severity === 'info' ? 'soft' : 'warn'), item.severity === 'error' ? '错误' : item.severity === 'warn' ? '注意' : '提示'); H(row, 'strong', 'rpd-row-t', item.title); H(row, 'span', 'rpd-muted', item.summary); });
   if (!flagged.length && !attention.length) empty(alerts, pipeline.data ? '暂无需要处理的实验或流程事项。' : '流水线状态：' + (pipeline.error?.status === 404 ? '还没有运行记录。' : errorText(pipeline.error)));
@@ -902,6 +917,13 @@ function expModel(db, folders, own, groups, inbox) {
 }
 
 R.experiments = async c => {
+  let customExt = null;
+  try {
+    const extFile = DIR + '/exp-custom.js';
+    if (await app.vault.adapter?.exists?.(extFile)) {
+      customExt = (new Function('dv', 'app', 'DIR', await app.vault.adapter.read(extFile)))(dv, app, DIR) || null;
+    }
+  } catch (_) {}
   const [shared, own, repro, inbox] = await Promise.all([expReadDesk(), expOwnPapers(), get('/experiments'), get('/inbox')]);
   const db = shared.desk;
   const folders = (app.vault.getAbstractFileByPath(OWN_DIR.slice(0, -1))?.children || []).filter(f => Array.isArray(f.children));
@@ -969,6 +991,7 @@ R.experiments = async c => {
     expForm(idea ? '更新验证进展' : '记录一个想法', [
       field('question', '要验证什么', { required: true }),
       field('stage', '当前判断', { options: ['待验证', '验证中', '小样本支持', '全量支持', '结果不一致', '暂不支持', '已搁置'].map(s => [s, s]) }),
+      field('summary', '一句话结论'),
       field('evidence', '当前证据', { long: true }),
       field('next', '下一步'),
       field('observation', '意外观察'),
@@ -1017,7 +1040,7 @@ R.experiments = async c => {
       const remote = runs.get(v.serverId || previous?.id);
       if (!remote?.raw && !v.name) throw new Error('请选择服务器运行，或填写运行编号');
       const id = previous?.id || v.serverId || expId();
-      const row = { ...v, id, name: remote?.raw?.runId || v.name, config: cfg.id, owner: owner.id };
+      const row = { ...(previous || {}), ...v, id, name: remote?.raw?.runId || v.name, config: cfg.id, owner: owner.id };
       const index = d.runs.findIndex(x => x.id === id);
       if (index >= 0 && (!previous || JSON.stringify(d.runs[index]) !== JSON.stringify(previous))) throw new Error('该运行已有更新，请重新打开后补记');
       if (d.runs.some(r => r.id !== id && r.name === row.name && r.owner === owner.id)) throw new Error('已有同编号运行，请打开原记录补记，或为重跑使用新编号');
@@ -1092,19 +1115,310 @@ R.experiments = async c => {
     }
     if (rows.length) expTable(s, 'original/' + item.id, ['配置', '指标', '原文值', '实测值', '差值', '对应运行'], rows);
   }
-  function configSection(parent, item) {
+
+  const STAGE_CLS = { '全量支持': 'good', '小样本支持': 'good', '验证中': 'accent', '待验证': 'accent', '待运行': 'soft', '仅有方案': 'soft', '结果不一致': 'warn', '暂不支持': 'danger', '已搁置': 'soft' };
+  const RUN_STATUS_CLS = { '已完成': 'good', '运行中': 'accent', '失败': 'danger', '已取消': 'soft', '待记录': 'soft' };
+
+  function expRunStats(runsList) {
+    let cost = 0, tokens = 0, hasCost = false, hasTokens = false;
+    for (const r of runsList) {
+      const m = r.metrics || {};
+      const entries = Object.entries(m).filter(([, v]) => typeof v === 'number' && Number.isFinite(v));
+      const totalCosts = entries.filter(([k]) => k.endsWith('_total_cost_usd'));
+      const costEntries = totalCosts.length ? totalCosts : entries.filter(([k]) => k.endsWith('_cost_usd'));
+      if (costEntries.length) { hasCost = true; cost += costEntries.reduce((s, [, v]) => s + v, 0); }
+      const totalToks = entries.filter(([k]) => k.endsWith('_total_tokens'));
+      const tokEntries = totalToks.length ? totalToks : entries.filter(([k]) => k.endsWith('_tokens'));
+      if (tokEntries.length) { hasTokens = true; tokens += tokEntries.reduce((s, [, v]) => s + v, 0); }
+    }
+    return { cost, tokens, hasCost, hasTokens };
+  }
+  function fmtTokens(n) { return n >= 1e6 ? (n / 1e6).toFixed(2) + 'M tok' : n >= 1e3 ? Math.round(n / 1e3) + 'k tok' : Math.round(n) + ' tok'; }
+  function fmtCost(stats, hasRuns) {
+    if (!hasRuns) return '待运行';
+    if (!stats.hasCost && !stats.hasTokens) return '离线 · $0';
+    return [stats.hasCost ? '$' + stats.cost.toFixed(2) : null, stats.hasTokens ? fmtTokens(stats.tokens) : null].filter(Boolean).join(' · ');
+  }
+
+  function renderInlineCode(parent, text) {
+    const parts = String(text || '').split(/(`[^`]+`)/g);
+    for (const part of parts) {
+      if (part.startsWith('`') && part.endsWith('`') && part.length >= 2) {
+        H(parent, 'code', 'rpd-exp-formula', part.slice(1, -1));
+      } else if (part) {
+        parent.appendChild(document.createTextNode(part));
+      }
+    }
+  }
+  function renderRichGuideValue(parent, val) {
+    const wrap = H(parent, 'div', 'rpd-exp-guide-val');
+    const appendItems = items => {
+      const list = H(wrap, 'div', 'rpd-exp-guide-list');
+      for (const raw of items) {
+        const m = String(raw).match(/^([①②③④⑤])\s*(.+)$/);
+        const row = H(list, 'div', 'rpd-exp-guide-item');
+        if (m) {
+          H(row, 'span', 'rpd-exp-guide-num', m[1]);
+          renderInlineCode(H(row, 'span', 'rpd-exp-guide-txt'), m[2]);
+        } else {
+          renderInlineCode(H(row, 'span', 'rpd-exp-guide-txt'), raw);
+        }
+      }
+    };
+    if (val && typeof val === 'object') {
+      if (val.summary) renderInlineCode(H(wrap, 'div', 'rpd-exp-guide-sum'), val.summary);
+      if (val.formula) H(wrap, 'div', 'rpd-exp-formula-box', val.formula);
+      if (Array.isArray(val.items) && val.items.length) appendItems(val.items);
+      if (val.note) renderInlineCode(H(wrap, 'div', 'rpd-exp-guide-note'), val.note);
+      return;
+    }
+    const text = String(val || '');
+    const marks = text.match(/[①②③④⑤]/g);
+    if (marks && marks.length >= 2) {
+      const idx = text.search(/[①②③④⑤]/);
+      const lead = text.slice(0, idx).replace(/[：:\s]+$/, '');
+      const rest = text.slice(idx);
+      const items = rest.split(/(?=[①②③④⑤])/).map(s => s.trim().replace(/[；;。\s]+$/, '')).filter(Boolean);
+      if (lead) renderInlineCode(H(wrap, 'div', 'rpd-exp-guide-sum'), lead + '：');
+      appendItems(items);
+      return;
+    }
+    renderInlineCode(wrap, text);
+  }
+  function renderStepDesignNeed(parent, idea) {
+    if (!idea?.gap && !idea?.needs?.length) return;
+    const box = H(parent, 'div', 'rpd-exp-design-box');
+    const hd = H(box, 'div', 'rpd-exp-design-head');
+    H(hd, 'span', 'rpd-exp-design-k', '需要什么样的实验才能验证？');
+    H(hd, 'span', 'rpd-muted', '先拆清现有评估盲区与验证条件，再落到下方具体实验');
+    if (idea.gap) {
+      const g = H(box, 'div', 'rpd-exp-design-gap');
+      H(g, 'strong', '', '为什么不能直接看原指标：');
+      H(g, 'span', '', idea.gap);
+    }
+    if (idea.needs?.length) {
+      const list = H(box, 'div', 'rpd-exp-design-list');
+      idea.needs.forEach((n, idx) => {
+        const row = H(list, 'div', 'rpd-exp-design-item');
+        H(row, 'span', 'rpd-exp-guide-num', String(idx + 1) + '.');
+        H(row, 'span', 'rpd-exp-design-txt', n.text || '');
+        if (n.exp) H(row, 'span', 'rpd-exp-badge', '→ 落地为 ' + n.exp);
+      });
+    }
+  }
+  function renderExpGuide(parent, item, expCode, guide, metrics, extraCls = '', showWhy = true) {
+    const svg = customExt?.renderDiagram?.(expCode, metrics || {}, item) || guide?.diagramSvg || '';
+    const hasFields = guide && (guide.why || guide.purpose || guide.fixed || guide.changed || guide.metricDef || guide.example || guide.howToRead);
+    if (!hasFields && !svg) return;
+    const box = H(parent, 'div', 'rpd-exp-mini-setup' + (extraCls ? ' ' + extraCls : ''));
+    if (hasFields) {
+      const rows = [
+        ...(showWhy ? [['为什么设计', guide.why, 'is-why']] : []),
+        ['具体目的', guide.purpose, ''],
+        ['固定不变', guide.fixed, ''],
+        ['只改什么', guide.changed, 'is-var'],
+        ['指标与算法', guide.metricDef, 'is-metric'],
+        ['结果怎么看', guide.howToRead, 'is-read']
+      ];
+      for (const [k, v, cls] of rows) {
+        if (!v) continue;
+        const r = H(box, 'div', 'rpd-exp-mini-setup-row' + (cls === 'is-why' ? ' is-why-row' : ''));
+        H(r, 'span', 'rpd-exp-mini-setup-k' + (cls ? ' ' + cls : ''), k);
+        renderRichGuideValue(r, v);
+      }
+    }
+    if (svg) {
+      const fig = H(box, 'div', 'rpd-exp-diagram');
+      const cap = H(fig, 'div', 'rpd-exp-diagram-head');
+      H(cap, 'span', 'rpd-exp-mini-setup-k is-ex', '图解示例');
+      if (guide?.example) H(cap, 'span', 'rpd-exp-diagram-cap', guide.example);
+      const canvas = H(fig, 'div', 'rpd-exp-diagram-canvas');
+      canvas.innerHTML = svg;
+    }
+  }
+  function renderMatrixBlock(parent, block, stateKey) {
+    const tabs = block.tabs || [];
+    if (!tabs.length) return;
+    const wrap = H(parent, 'div', 'rpd-exp-matrix-wrap');
+    const store = window.__rpdMatrixTabs ||= {};
+    const state = store[stateKey] ||= { tab: tabs[0].key };
+    if (!tabs.some(t => t.key === state.tab)) state.tab = tabs[0].key;
+    const bar = H(wrap, 'div', 'rpd-tools rpd-exp-matrix-tabs');
+    const body = H(wrap, 'div');
+    function paint() {
+      bar.empty(); body.empty();
+      for (const t of tabs) chip(bar, t.label, state.tab === t.key, () => { state.tab = t.key; paint(); });
+      const spec = tabs.find(t => t.key === state.tab) || tabs[0];
+      const hd = H(body, 'div', 'rpd-exp-matrix-head');
+      if (spec.title) H(hd, 'strong', '', spec.title);
+      if (spec.hint) H(hd, 'span', 'rpd-muted', spec.hint);
+      const sc = H(body, 'div', 'rpd-table-wrap');
+      const tbl = H(sc, 'table', 'rpd-exp-matrix');
+      const cols = spec.cols || [];
+      const trh = H(H(tbl, 'thead'), 'tr');
+      H(trh, 'th', '', spec.rowHeader || '');
+      for (const col of cols) H(trh, 'th', '', col);
+      const tb = H(tbl, 'tbody');
+      const thresh = spec.thresh ?? 1.0;
+      const unit = spec.unit ?? '%';
+      const dUnit = spec.deltaUnit ?? 'pp';
+      for (const row of spec.rows || []) {
+        const tr = H(tb, 'tr');
+        H(tr, 'td', 'rpd-exp-matrix-l', row.label);
+        const vals = row.values || [];
+        const baseArr = row.baseline || spec.mean || [];
+        for (let k = 0; k < cols.length; k++) {
+          const v1 = vals[k], base = baseArr[k];
+          const hasNum = typeof v1 === 'number' && Number.isFinite(v1);
+          const hasBase = hasNum && typeof base === 'number' && Number.isFinite(base);
+          const d = hasBase ? v1 - base : null;
+          const cls = d == null ? '' : d >= thresh ? 'is-up' : d <= -thresh ? 'is-down' : '';
+          const td = H(tr, 'td', cls);
+          H(td, 'div', 'rpd-exp-matrix-v', hasNum ? v1.toFixed(spec.decimals ?? 1) + unit : String(v1 ?? '—'));
+          if (d != null) H(td, 'div', 'rpd-exp-matrix-d', (d >= 0 ? '+' : '') + d.toFixed(spec.decimals ?? 1) + dUnit);
+          if (row.tooltips?.[k]) td.title = row.tooltips[k];
+          else if (hasBase) td.title = (row.baseline ? '基线 ' : '均值 ') + base.toFixed(2) + unit + ' → 当前 ' + v1.toFixed(2) + unit + '（差 ' + (d >= 0 ? '+' : '') + d.toFixed(2) + dUnit + '）';
+        }
+      }
+      if (spec.summaryRow) {
+        const tr = H(tb, 'tr', 'rpd-exp-matrix-sum');
+        H(tr, 'td', 'rpd-exp-matrix-l', spec.summaryRow.label || '');
+        const sv = spec.summaryRow.values || [], sd = spec.summaryRow.subValues || [];
+        for (let k = 0; k < cols.length; k++) {
+          const td = H(tr, 'td');
+          if (sv[k] != null) H(td, 'div', 'rpd-exp-matrix-v', String(sv[k]));
+          if (sd[k] != null) H(td, 'div', 'rpd-exp-matrix-d', String(sd[k]));
+        }
+      }
+    }
+    paint();
+  }
+  function renderTablesBlock(parent, block, stateKey) {
+    const tabs = block.tabs || [];
+    if (!tabs.length) return;
+    const wrap = H(parent, 'div', 'rpd-exp-matrix-wrap');
+    if (block.tag || block.badge) {
+      const topBar = H(wrap, 'div', 'rpd-exp-matrix-head');
+      const left = H(topBar, 'div', 'rpd-exp-mini-title');
+      if (block.tag) H(left, 'span', 'rpd-tag good', block.tag);
+      if (block.badge) H(left, 'strong', '', block.badge);
+    }
+    const store = window.__rpdTableTabs ||= {};
+    const state = store[stateKey] ||= { tab: tabs[0].key };
+    if (!tabs.some(t => t.key === state.tab)) state.tab = tabs[0].key;
+    const bar = tabs.length > 1 ? H(wrap, 'div', 'rpd-tools rpd-exp-matrix-tabs') : null;
+    const body = H(wrap, 'div');
+    function paint() {
+      if (bar) { bar.empty(); for (const t of tabs) chip(bar, t.label, state.tab === t.key, () => { state.tab = t.key; paint(); }); }
+      const sp = tabs.find(t => t.key === state.tab) || tabs[0];
+      body.empty();
+      if (sp.title || sp.hint) {
+        const hd = H(body, 'div', 'rpd-exp-matrix-head');
+        if (sp.title) H(hd, 'strong', '', sp.title);
+        if (sp.hint) H(hd, 'span', 'rpd-muted', sp.hint);
+      }
+      const sc = H(body, 'div', 'rpd-table-wrap');
+      const tbl = H(sc, 'table', 'rpd-table rpd-exp-followup-table');
+      const trh = H(H(tbl, 'thead'), 'tr');
+      for (const h of sp.heads || []) H(trh, 'th', '', h);
+      const tb = H(tbl, 'tbody');
+      for (const row of sp.rows || []) {
+        const tr = H(tb, 'tr');
+        for (const cell of row) {
+          const text = String(cell ?? '');
+          H(tr, 'td', text.includes('▲') ? 'is-hi' : '', text);
+        }
+      }
+      if (sp.note) H(body, 'p', 'rpd-exp-mini-note', sp.note);
+    }
+    paint();
+  }
+  function renderRunDisplay(parent, run, statePrefix) {
+    const d = run?.display;
+    if (!d) return false;
+    const hasSummary = Array.isArray(d.summaryRows) && d.summaryRows.length > 0;
+    const hasBlocks = Array.isArray(d.blocks) && d.blocks.length > 0;
+    if (!hasSummary && !hasBlocks) return false;
+    const box = H(parent, 'div', 'rpd-exp-mini-panel is-full');
+    if (hasSummary) {
+      const tbl = H(box, 'table', 'rpd-exp-mini-table');
+      const tb = H(tbl, 'tbody');
+      for (const [label, val, hint, tone] of d.summaryRows) {
+        const tr = H(tb, 'tr', tone ? 'is-' + tone : '');
+        H(tr, 'td', 'rpd-exp-mini-k', label);
+        H(tr, 'td', 'rpd-exp-mini-v', val);
+        H(tr, 'td', 'rpd-exp-mini-h', hint || '');
+      }
+      if (d.summaryNote) H(box, 'p', 'rpd-exp-mini-note', d.summaryNote);
+    }
+    (d.blocks || []).forEach((blk, idx) => {
+      const key = statePrefix + '/' + (blk.id || idx);
+      if (blk.kind === 'matrix') renderMatrixBlock(box, blk, key);
+      else if (blk.kind === 'tables') renderTablesBlock(box, blk, key);
+      else if (blk.kind === 'table') renderTablesBlock(box, { tabs: [{ key: 'single', label: '', ...blk }] }, key);
+    });
+    const auditRow = H(box, 'div', 'rpd-exp-audit-bar');
+    const left = H(auditRow, 'div', 'rpd-exp-audit-left');
+    H(left, 'span', 'rpd-muted', '关联运行：');
+    runLink(left, run);
+    if (d.audit) H(left, 'span', 'rpd-tag good', d.audit);
+    btn(auditRow, '完整指标 / 命令 ↗', 'rpd-ghost', () => showRun(run));
+    if (run.result) {
+      const prose = H(parent, 'details', 'rpd-exp-idea-more');
+      H(prose, 'summary', '', '展开原始结果观察文字');
+      H(H(prose, 'div', 'rpd-exp-idea-more-body'), 'p', '', run.result);
+    }
+    return true;
+  }
+
+  function expGroupData(item) {
     const list = [...configs.values()].filter(cfg => cfg.owner === item.id);
+    if (!list.some(cfg => cfg.expCode)) return { grouped: false, items: [], byId: new Map(), other: [], allConfigs: list };
+    const entries = list.map(cfg => ({ cfg, runs: allRuns.filter(r => r.config === cfg.id) }));
+    const hasExplicitPhase = list.some(cfg => !!cfg.phase);
+    const phaseRank = cfg => ({ formal: 0, pilot: 1, baseline: 2, plan: 3, archive: 4 }[cfg.phase] ?? (hasExplicitPhase ? 4 : (allRuns.some(r => r.config === cfg.id) ? 0 : 3)));
+    const groups = new Map(), other = [];
+    for (const entry of entries) {
+      const code = entry.cfg.expCode;
+      if (!code) { other.push(entry); continue; }
+      if (!groups.has(code)) groups.set(code, []);
+      groups.get(code).push({ ...entry, phaseRank: phaseRank(entry.cfg) });
+    }
+    const itemsList = [...groups.entries()].map(([code, rawGroup]) => {
+      const group = rawGroup.sort((a, b) => a.phaseRank - b.phaseRank);
+      const formalEntries = group.filter(e => e.phaseRank === 0);
+      const historyEntries = group.filter(e => e.phaseRank !== 0);
+      const primaryCfg = formalEntries[0]?.cfg || group[0]?.cfg;
+      const guideCfg = formalEntries.find(e => e.cfg.guide)?.cfg || group.find(e => e.cfg.guide)?.cfg;
+      const meta = {
+        title: group.find(e => e.cfg.title)?.cfg.title || primaryCfg?.name || code,
+        claims: group.find(e => e.cfg.claims)?.cfg.claims || '',
+        ...(guideCfg?.guide || {})
+      };
+      const formalRuns = formalEntries.flatMap(e => e.runs);
+      const allExpRuns = group.flatMap(e => e.runs);
+      const status = formalRuns.some(run => statusOf(run) === '运行中') ? ['正式运行中', 'accent']
+        : formalRuns.length && formalRuns.every(run => statusOf(run) === '已完成') ? ['正式已完成', 'good']
+        : allExpRuns.length ? ['有预跑记录', 'accent'] : ['待运行', 'soft'];
+      return { id: code, meta, group, primaryCfg, formalEntries, historyEntries, formalRuns, allExpRuns, status, stats: expRunStats(formalRuns) };
+    }).sort((a, b) => a.id.localeCompare(b.id, 'zh-CN', { numeric: true }));
+    return { grouped: true, items: itemsList, byId: new Map(itemsList.map(x => [x.id, x])), other, allConfigs: list };
+  }
+
+  function configSection(parent, item, viewState) {
     const isBaseline = item.kind === 'baseline';
-    const s = section(parent, isBaseline ? '配置与运行结果' : '本文方法的实验', '＋ 配置', () => configForm(item));
-    if (!list.length) empty(s, isBaseline ? '添加原文复现配置，即可记录实测值；换数据集或调参时可派生新配置。' : '添加配置，登记本文方法的小试、全量或消融运行。');
-    for (const cfg of list) {
-      const box = H(s, 'details', 'rpd-exp-config'); box.open = cfg === list[0];
-      const summary = H(box, 'summary'); H(summary, 'strong', '', cfg.name);
-      const rr = allRuns.filter(r => r.config === cfg.id);
-      H(summary, 'span', 'rpd-muted', [cfg.dataset, cfg.group?.status, Math.max(rr.length, cfg.group?.runCount || 0) + ' 次运行'].filter(Boolean).join(' · '));
+    const data = isBaseline ? { grouped: false, allConfigs: [...configs.values()].filter(cfg => cfg.owner === item.id) } : expGroupData(item);
+
+    function configCard(parentEl, cfg, rr, label, plan = false, open = false) {
+      const box = H(parentEl, 'details', 'rpd-exp-config'); box.open = open || (isBaseline && cfg === data.allConfigs[0]);
+      const summary = H(box, 'summary'); H(summary, 'strong', '', label || cfg.name);
+      if (!plan) {
+        const count = Math.max(rr.length, cfg.group?.runCount || 0) + ' 次运行';
+        H(summary, 'span', 'rpd-muted', (label ? [count] : [cfg.dataset, cfg.group?.status, count]).filter(Boolean).join(' · '));
+      }
       const body = H(box, 'div', 'rpd-exp-config-body');
       const meta = [['派生自', cfg.parentName], ['数据集', cfg.dataset], ['参数', cfg.params], ['评测协议', cfg.protocol], ['Git / 快照', cfg.commit], ['原文报告值', cfg.original !== '' && cfg.original != null ? cfg.metric + ' ' + cfg.original : '']];
-      for (const [label, value] of meta) if (value) H(body, 'p', 'rpd-count', label + '　' + value);
+      for (const [k, value] of meta) if (value) H(body, 'p', 'rpd-count', k + '　' + value);
       if (cfg.group) {
         const g = cfg.group;
         H(body, 'p', 'rpd-count', '容差内 ' + g.withinTolerance + ' / ' + g.total + ' · 缺 ' + g.missing + ' 项');
@@ -1116,9 +1430,91 @@ R.experiments = async c => {
         cfg.original !== '' && cfg.original != null && r.score !== '' && r.score != null ? expDifference(r.score, cfg.original) : '—',
         r.result || '—'
       ]));
-      else H(body, 'p', 'rpd-muted', '尚无关联的逐次运行明细。');
+      else if (!plan) H(body, 'p', 'rpd-muted', '尚无关联的逐次运行明细。');
       const bar = H(body, 'div', 'rpd-tools');
       btn(bar, '记录运行', '', () => runForm(item, cfg)); btn(bar, '派生配置', 'rpd-ghost', () => configForm(item, cfg));
+    }
+
+    if (!data.grouped) {
+      const list = data.allConfigs;
+      const s = section(parent, isBaseline ? '配置与运行结果' : '本文方法的实验', '＋ 配置', () => configForm(item));
+      if (!list.length) return empty(s, isBaseline ? '添加原文复现配置，即可记录实测值；换数据集或调参时可派生新配置。' : '添加配置，登记本文方法的小试、全量或消融运行。');
+      for (const cfg of list) configCard(s, cfg, allRuns.filter(r => r.config === cfg.id), null, false, !isBaseline && cfg === list[0]);
+      return;
+    }
+
+    const expItems = data.items;
+    const bar = H(parent, 'div', 'rpd-tools');
+    chip(bar, '全部 (' + expItems.length + ')', viewState.expFilter === 'ALL', () => { viewState.expFilter = 'ALL'; draw(); });
+    for (const ex of expItems) chip(bar, ex.id, viewState.expFilter === ex.id, () => { viewState.expFilter = ex.id; draw(); });
+    if (expItems.some(ex => ex.historyEntries.length && ex.formalEntries.length)) {
+      const histLabel = H(bar, 'label', 'rpd-check');
+      const histCb = H(histLabel, 'input'); histCb.type = 'checkbox'; histCb.checked = !!viewState.showHistory;
+      H(histLabel, 'span', '', '显示历史预跑与方案');
+      histCb.addEventListener('change', () => { viewState.showHistory = histCb.checked; draw(); });
+    }
+    btn(bar, '＋ 新建配置', 'rpd-ghost', () => configForm(item));
+
+    const visible = viewState.expFilter === 'ALL' ? expItems : expItems.filter(ex => ex.id === viewState.expFilter);
+    const defaultPhaseLabels = ['正式运行', '早期小批量预跑', '早期对比', '实验方案', '历史记录'];
+    for (const ex of visible) {
+      const card = H(parent, 'article', 'rpd-exp-card');
+      const head = H(card, 'div', 'rpd-exp-card-head');
+      const titleBox = H(head, 'div', 'rpd-exp-card-title');
+      H(titleBox, 'span', 'rpd-exp-badge', ex.id);
+      H(titleBox, 'h3', '', ex.meta.title);
+      if (ex.meta.claims) H(titleBox, 'span', 'rpd-tag soft', ex.meta.claims);
+      H(titleBox, 'span', 'rpd-tag ' + ex.status[1], ex.status[0]);
+      H(titleBox, 'span', 'rpd-tag soft', fmtCost(ex.stats, ex.formalRuns.length > 0));
+      const acts = H(head, 'div', 'rpd-exp-idea-acts');
+      const primaryCfg = ex.primaryCfg;
+      if (primaryCfg) {
+        btn(acts, '记录运行', 'rpd-ghost', () => runForm(item, primaryCfg));
+        btn(acts, '派生配置', 'rpd-ghost', () => configForm(item, primaryCfg));
+      }
+      renderExpGuide(card, item, ex.id, ex.meta, ex.formalRuns[0]?.metrics, 'is-card');
+      const metaRows = [['数据集', primaryCfg?.dataset], ['评测协议', primaryCfg?.protocol]].filter(([, v]) => v);
+      if (metaRows.length) {
+        const metaGrid = H(card, 'div', 'rpd-exp-meta-grid');
+        for (const [k, v] of metaRows) {
+          const cell = H(metaGrid, 'div', 'rpd-exp-meta-item');
+          H(cell, 'span', 'rpd-exp-meta-k', k); H(cell, 'span', '', v);
+        }
+      }
+      const primaryRun = ex.formalRuns.find(r => r.display) || ex.formalRuns[0];
+      const renderedDisplay = primaryRun ? renderRunDisplay(card, primaryRun, 'runs/' + item.id + '/' + ex.id) : false;
+      if (!renderedDisplay) {
+        if (ex.formalEntries.length) {
+          for (const { cfg, runs } of ex.formalEntries) {
+            if (runs.length) {
+              expTable(card, 'formal/' + cfg.id, ['运行', '状态', cfg.metric || '实测值', '结果与观察'], runs.map(r => [
+                el => runLink(el, r),
+                el => H(el, 'span', 'rpd-tag ' + (RUN_STATUS_CLS[statusOf(r)] || 'soft'), statusOf(r)),
+                num(r.score === '' ? null : r.score),
+                r.result || '—'
+              ]));
+            } else empty(card, '正式配置尚未记录运行。');
+          }
+        } else {
+          const planCfg = ex.group[0]?.cfg;
+          if (planCfg?.params) H(card, 'p', 'rpd-sum', planCfg.params);
+          else empty(card, '已有实验方案，尚未运行。');
+        }
+      }
+      if (ex.historyEntries.length && ex.formalEntries.length) {
+        const hist = H(card, 'details', 'rpd-exp-history');
+        if (viewState.showHistory) hist.open = true;
+        H(hist, 'summary', '', '历史预跑与原始实验方案 · ' + ex.historyEntries.length + ' 项（按需展开）');
+        const histBody = H(hist, 'div', 'rpd-exp-config-body');
+        for (const { cfg, runs, phaseRank } of ex.historyEntries) {
+          configCard(histBody, cfg, runs, cfg.phaseLabel || defaultPhaseLabels[phaseRank] || cfg.name, cfg.phase === 'plan', false);
+        }
+      }
+    }
+    if (data.other.length && viewState.expFilter === 'ALL') {
+      const extra = H(parent, 'details', 'rpd-exp-config');
+      H(extra, 'summary', '', '其他实验配置 · ' + data.other.length + ' 项');
+      for (const { cfg, runs } of data.other) configCard(extra, cfg, runs);
     }
   }
 
@@ -1136,38 +1532,294 @@ R.experiments = async c => {
       }, u.place, [cfg?.name, cfg?.protocol].filter(Boolean).join(' · ') || '—', el => runLink(el, runs.get(u.run)), u.metric || '—'];
     }));
   }
-  function paperView(p, item) {
-    const s = section(p, '想法验证进展', '＋ 记录想法', () => ideaForm(item));
-    const ideas = db.ideas.filter(i => i.owner === item.id);
-    if (!ideas.length) empty(s, '记下第一个要验证的问题，随后补充证据、意外观察和下一步。');
-    else expTable(s, 'ideas/' + item.id, ['研究问题', '进展与当前证据', '下一步'], ideas.map(i => [
-      el => { jump(el, i.question, () => ideaForm(item, i)); if (i.note) fileLink(el, i.note, '实验笔记'); },
-      el => {
-        H(el, 'span', 'rpd-tag soft', i.stage); if (i.evidence) H(el, 'p', '', i.evidence);
-        if (i.observation) H(el, 'p', 'rpd-count', '意外观察　' + i.observation);
-        for (const r of allRuns.filter(r => r.ideaId === i.id)) {
-          const line = H(el, 'div'); runLink(line, r); H(line, 'span', 'rpd-muted', ' · ' + statusOf(r));
-          if (r.result) H(line, 'p', '', r.result);
-        }
-        const related = (i.runIds || '').split(/[,，\n]/).map(x => x.trim()).filter(Boolean);
-        for (const id of related) {
-          const matches = allRuns.filter(r => runTitle(r) === id || r.id === id);
-          if (matches.length === 1) runLink(el, matches[0]); else H(el, 'span', 'rpd-muted', id + ' ');
-        }
-        allRuns.filter(r => i.note && r.raw?.claimedBy?.kind === 'experimentNote' && r.raw.claimedBy.id === i.note && !related.includes(runTitle(r))).forEach(r => runLink(el, r));
-      }, i.next || '—'
-    ]));
-    const ungrouped = allRuns.filter(r => !r.config && r.owner === item.id);
-    if (ungrouped.length) { const s = sec(p, '已认领到本文的运行'); ungrouped.forEach(r => runLink(s, r)); }
-    references(p, item); configSection(p, item);
+
+  function parseIdeaBadge(question) {
+    const m = (question || '').match(/^(RQ\d+|C\d+|E\d+|H\d+|[A-Z]+\d+)\s*[·:：]\s*(.+)$/);
+    return m ? { badge: m[1], text: m[2] } : { badge: null, text: question || '' };
   }
+  const isRqIdea = i => i.kind === 'rq' || (!i.kind && /^RQ\d+\s*[·:：]/.test(i.question || ''));
+  const isTodoIdea = i => i.kind === 'todo';
+  const isClaimIdea = i => !isRqIdea(i) && !isTodoIdea(i);
+  const ideaOrder = i => (typeof i.order === 'number' ? i.order : 999999);
+  const ideaKey = i => parseIdeaBadge(i.question).badge || i.id;
+
+  function renderIdeasList(parent, item, ideas, expData, openExp, focusKey, clearFocus) {
+    const hasSteps = ideas.some(i => i.step || i.short);
+    const activeIdea = focusKey ? ideas.find(i => ideaKey(i) === focusKey) : null;
+    const s = sec(parent, hasSteps ? (activeIdea ? '分步证据链 · ' + (activeIdea.step || '') + ' ' + (activeIdea.short || '') : '分步证据链（按验证顺序）') : '想法与命题验证');
+    const headActs = H(s.firstElementChild, 'div', 'rpd-exp-idea-acts');
+    if (activeIdea && clearFocus) btn(headActs, '显示全部 ' + ideas.length + ' 步', '', clearFocus);
+    btn(headActs, '＋ 记录命题', 'rpd-ghost', () => ideaForm(item));
+    const visibleIdeas = activeIdea ? [activeIdea] : ideas;
+    if (!visibleIdeas.length) return empty(s, '记下第一个要验证的问题，随后补充证据、意外观察和下一步。');
+
+    const list = H(s, 'div', 'rpd-exp-idea-list');
+    for (const idea of visibleIdeas) {
+      const { badge, text: qText } = parseIdeaBadge(idea.question);
+      const key = badge || idea.id;
+      const card = H(list, 'article', 'rpd-exp-idea-card' + (focusKey && key === focusKey ? ' is-focus' : '') + (idea.stage === '待验证' && !idea.evidence && !idea.summary ? ' is-pending' : ''));
+      if (badge) card.dataset.claimKey = badge;
+
+      const head = H(card, 'div', 'rpd-exp-idea-head');
+      if (idea.step) H(head, 'span', 'rpd-exp-step-pill', idea.step);
+      if (badge) H(head, 'span', 'rpd-exp-badge', badge);
+      H(head, 'div', 'rpd-exp-idea-q', qText);
+      const acts = H(head, 'div', 'rpd-exp-idea-acts');
+      if (idea.stage) H(acts, 'span', 'rpd-tag ' + (STAGE_CLS[idea.stage] || 'soft'), idea.stage);
+      btn(acts, '编辑', 'rpd-ghost', () => ideaForm(item, idea));
+
+      renderStepDesignNeed(card, idea);
+
+      if (expData?.grouped && Array.isArray(idea.exps) && idea.exps.length) {
+        const expGrid = H(card, 'div', 'rpd-exp-mini-grid');
+        for (const eid of idea.exps) {
+          const ex = expData.byId.get(eid);
+          if (!ex) continue;
+          const panel = H(expGrid, 'div', 'rpd-exp-mini-panel');
+          const pHead = H(panel, 'div', 'rpd-exp-mini-head');
+          const pTitle = H(pHead, 'div', 'rpd-exp-mini-title');
+          H(pTitle, 'span', 'rpd-exp-badge', '落地实验 · ' + ex.id);
+          H(pTitle, 'strong', '', ex.meta.title);
+          const pRight = H(pHead, 'div', 'rpd-exp-mini-right');
+          H(pRight, 'span', 'rpd-tag soft', fmtCost(ex.stats, ex.formalRuns.length > 0));
+          btn(pRight, '明细 →', 'rpd-link', () => openExp(ex.id));
+          renderExpGuide(panel, item, ex.id, ex.meta, ex.formalRuns[0]?.metrics, '', false);
+          const primaryRun = ex.formalRuns.find(r => r.display) || ex.formalRuns[0];
+          if (!primaryRun || !renderRunDisplay(panel, primaryRun, 'claims/' + item.id + '/' + ex.id)) {
+            if (ex.formalRuns.length) {
+              for (const r of ex.formalRuns) {
+                const row = H(panel, 'div', 'rpd-row');
+                runLink(row, r);
+                H(row, 'span', 'rpd-tag ' + (RUN_STATUS_CLS[statusOf(r)] || 'soft'), statusOf(r));
+                if (r.result) H(row, 'span', 'rpd-muted', r.result);
+              }
+            } else H(panel, 'p', 'rpd-muted', '尚未运行正式验证。');
+          }
+        }
+      }
+
+      const shortEvidence = !idea.summary && idea.evidence?.length <= 140;
+      const takeaway = idea.summary || (shortEvidence ? idea.evidence : '');
+      if (takeaway) {
+        const sumBox = H(card, 'div', 'rpd-exp-takeaway');
+        H(sumBox, 'span', 'rpd-exp-takeaway-k', '综合结论');
+        H(sumBox, 'span', '', takeaway);
+      }
+      if (idea.next) {
+        const nextBox = H(card, 'div', 'rpd-exp-next-strip');
+        H(nextBox, 'span', 'rpd-exp-next-k', '下一步');
+        H(nextBox, 'span', '', idea.next);
+      }
+
+      const related = (idea.runIds || '').split(/[,，\n]/).map(id => id.trim()).filter(Boolean);
+      const linkedRuns = new Map(allRuns.filter(r => r.ideaId === idea.id || (
+        idea.note && r.raw?.claimedBy?.kind === 'experimentNote' && r.raw.claimedBy.id === idea.note
+      )).map(r => [r.id, r]));
+      const unresolved = [];
+      for (const id of new Set(related)) {
+        const matches = allRuns.filter(r => r.id === id || runTitle(r) === id);
+        if (matches.length === 1) linkedRuns.set(matches[0].id, matches[0]);
+        else unresolved.push(id);
+      }
+
+      const evidence = shortEvidence ? '' : idea.evidence;
+      if (!evidence && !idea.observation && !idea.note && !linkedRuns.size && !unresolved.length) continue;
+      const details = H(card, 'details', 'rpd-exp-idea-more');
+      H(details, 'summary', '', '展开完整文字证据与关联运行（' + linkedRuns.size + ' 次）');
+      const body = H(details, 'div', 'rpd-exp-idea-more-body');
+      if (evidence) {
+        H(body, 'h5', 'rpd-count', '完整实验证据');
+        for (const line of evidence.split(/\n+/).filter(Boolean)) H(body, 'p', '', line);
+      }
+      if (idea.observation) H(body, 'p', '', '意外观察：' + idea.observation);
+      if (idea.note) fileLink(body, idea.note, '实验笔记');
+      if (linkedRuns.size || unresolved.length) {
+        H(body, 'h5', 'rpd-count', '关联运行（点击看详情）');
+        for (const run of linkedRuns.values()) {
+          const row = H(body, 'div'); runLink(row, run); H(row, 'span', 'rpd-muted', ' · ' + statusOf(run));
+        }
+        for (const id of unresolved) H(body, 'div', 'rpd-muted', id);
+      }
+    }
+  }
+
+  function renderBacklogView(parent, item, todos, focusClaim, openExp) {
+    const d = item.display || {};
+    const s = sec(parent, d.todoTitle || '待推进实验清单', d.todoSubtitle || '');
+    if (d.todoSummary) {
+      const box = H(s, 'div', 'rpd-exp-design-box');
+      if (d.todoSummary.title || d.todoSummary.hint) {
+        const hd = H(box, 'div', 'rpd-exp-design-head');
+        if (d.todoSummary.title) H(hd, 'span', 'rpd-exp-design-k', d.todoSummary.title);
+        if (d.todoSummary.hint) H(hd, 'span', 'rpd-muted', d.todoSummary.hint);
+      }
+      if (Array.isArray(d.todoSummary.steps) && d.todoSummary.steps.length) {
+        const list = H(box, 'div', 'rpd-exp-design-list');
+        for (const st of d.todoSummary.steps) {
+          const row = H(list, 'div', 'rpd-exp-design-item');
+          if (st.prefix) H(row, 'span', 'rpd-exp-guide-num', st.prefix);
+          H(row, 'span', 'rpd-exp-design-txt', st.text || '');
+        }
+      }
+    }
+    const list = H(s, 'div', 'rpd-exp-idea-list');
+    for (const it of todos) {
+      const tone = it.tone || 'soft';
+      const card = H(list, 'article', 'rpd-exp-idea-card rpd-exp-todo-card is-' + tone);
+      const head = H(card, 'div', 'rpd-exp-idea-head');
+      if (it.priority) H(head, 'span', 'rpd-tag ' + tone, it.priority);
+      if (it.phase) H(head, 'span', 'rpd-exp-step-pill', it.phase);
+      H(head, 'div', 'rpd-exp-idea-q', it.question);
+      const acts = H(head, 'div', 'rpd-exp-idea-acts');
+      if (it.cost) H(acts, 'span', 'rpd-tag soft', it.cost);
+      if (it.claim) btn(acts, '看 ' + it.claim + ' ↗', 'rpd-ghost', () => focusClaim(it.claim));
+      if (it.exp) btn(acts, '看 ' + it.exp + ' 明细 →', 'rpd-link', () => openExp(it.exp));
+      btn(acts, '编辑', 'rpd-ghost', () => ideaForm(item, it));
+      if (it.why) {
+        const why = H(card, 'div', 'rpd-exp-todo-why');
+        H(why, 'strong', '', '原因 / 目标：'); H(why, 'span', '', it.why);
+      }
+      if (Array.isArray(it.actions) && it.actions.length) {
+        const ul = H(card, 'div', 'rpd-exp-guide-list rpd-exp-todo-list');
+        it.actions.forEach((a, idx) => {
+          const row = H(ul, 'div', 'rpd-exp-guide-item');
+          H(row, 'span', 'rpd-exp-guide-num', String(idx + 1) + '.');
+          H(row, 'span', 'rpd-exp-guide-txt', a);
+        });
+      }
+    }
+  }
+
+  function paperView(p, item) {
+    const views = window.__rpdExpView ||= {};
+    const viewState = views[item.id] ||= { sub: 'overview', expFilter: 'ALL', showHistory: false, focusClaim: null };
+    const allIdeas = db.ideas.filter(i => i.owner === item.id);
+    const rqIdea = allIdeas.find(isRqIdea);
+    const claimIdeas = allIdeas.filter(isClaimIdea).sort((a, b) => ideaOrder(a) - ideaOrder(b));
+    const todoIdeas = allIdeas.filter(isTodoIdea).sort((a, b) => ideaOrder(a) - ideaOrder(b));
+    const uses = db.uses.filter(u => u.paper === item.id);
+    const paperRuns = allRuns.filter(r => ownerOf(r)?.id === item.id);
+    const expData = expGroupData(item);
+    const hasRoadmap = claimIdeas.some(i => i.step || i.short);
+    const disp = item.display || {};
+
+    const openExp = eid => { viewState.sub = 'runs'; viewState.expFilter = eid; viewState.focusClaim = null; draw(); };
+    const focusClaim = key => { viewState.sub = 'overview'; viewState.focusClaim = viewState.focusClaim === key ? null : key; draw(); };
+    const clearFocus = () => { viewState.focusClaim = null; draw(); };
+
+    const hero = H(p, 'section', 'rpd-exp-hero');
+    const heroTop = H(hero, 'div', 'rpd-exp-hero-top');
+    const heroTagWrap = H(heroTop, 'div', 'rpd-exp-hero-tags');
+    const rqParsed = rqIdea ? parseIdeaBadge(rqIdea.question) : null;
+    H(heroTagWrap, 'span', 'rpd-exp-badge', rqParsed?.badge || '核心研究问题');
+    H(heroTagWrap, 'span', 'rpd-muted', disp.subtitle || '核心研究问题');
+    const heroActions = H(heroTop, 'div', 'rpd-exp-idea-acts');
+    if (expData.grouped) {
+      const doneCount = expData.items.filter(e => e.status[0] === '正式已完成').length;
+      const formalStats = expRunStats(expData.items.flatMap(e => e.formalRuns));
+      H(heroActions, 'span', 'rpd-tag good', '正式实验 ' + doneCount + ' / ' + expData.items.length);
+      H(heroActions, 'span', 'rpd-tag soft', 'API ' + (formalStats.hasCost ? '$' + formalStats.cost.toFixed(2) : '$0') + (formalStats.hasTokens ? ' · ' + fmtTokens(formalStats.tokens) : ''));
+    }
+    if (rqIdea) btn(heroActions, '编辑研究问题', 'rpd-ghost', () => ideaForm(item, rqIdea));
+    else btn(heroActions, '＋ 设定研究问题', 'rpd-ghost', () => ideaForm(item));
+
+    if (rqIdea) H(hero, 'h3', 'rpd-exp-hero-q', rqParsed.text);
+    else H(hero, 'p', 'rpd-muted', '尚未设定核心研究问题（点击右上角设定，或新建以 “RQ1 · ” 开头的命题）。');
+    if (disp.scope) H(hero, 'p', 'rpd-exp-hero-plain', disp.scope);
+
+    if (hasRoadmap) {
+      const roadmap = H(hero, 'div', 'rpd-exp-roadmap');
+      for (const st of claimIdeas) {
+        const key = ideaKey(st);
+        const stageText = st.stage || '待验证';
+        const stageCls = STAGE_CLS[stageText] || 'soft';
+        const card = H(roadmap, 'button', 'rpd-exp-road-step' + (viewState.focusClaim === key ? ' is-active' : ''));
+        card.type = 'button';
+        if (st.goal) card.title = st.goal;
+        const top = H(card, 'div', 'rpd-exp-road-top');
+        H(top, 'span', 'rpd-exp-road-num', st.step || key);
+        H(top, 'span', 'rpd-tag ' + stageCls, stageText);
+        H(card, 'div', 'rpd-exp-road-title', st.short || parseIdeaBadge(st.question).text);
+        H(card, 'div', 'rpd-exp-road-sub', [key, Array.isArray(st.exps) && st.exps.length ? st.exps.join(' / ') : ''].filter(Boolean).join(' · '));
+        card.addEventListener('click', () => focusClaim(key));
+      }
+    }
+
+    if (disp.verdictText || disp.benchmarkText) {
+      const metaFoot = H(hero, 'div', 'rpd-exp-hero-foot');
+      if (disp.verdictText) {
+        const f1 = H(metaFoot, 'div', 'rpd-exp-hero-foot-item');
+        H(f1, 'span', 'rpd-exp-meta-k', disp.verdictLabel || '当前总判断');
+        H(f1, 'span', '', disp.verdictText);
+      }
+      if (disp.benchmarkText) {
+        const f2 = H(metaFoot, 'div', 'rpd-exp-hero-foot-item');
+        H(f2, 'span', 'rpd-exp-meta-k', disp.benchmarkLabel || '当前基准与下一步');
+        H(f2, 'span', '', disp.benchmarkText);
+      }
+    }
+
+    if (!hasRoadmap) {
+      const stats = expRunStats(paperRuns);
+      const kpis = H(p, 'div', 'rpd-exp-kpis');
+      [
+        ['验证命题', claimIdeas.length + ' 条', '当前论文命题'],
+        ['实验配置', expData.allConfigs.length + ' 个', '本文实验配置'],
+        ['运行记录', paperRuns.length + ' 次', '全部关联运行'],
+        ['引用 Baseline', uses.length + ' 项', stats.hasCost ? '累计 $' + stats.cost.toFixed(2) : '论文图表引用']
+      ].forEach(([label, val, hint]) => {
+        const box = H(kpis, 'div', 'rpd-exp-kpi');
+        H(box, 'span', 'rpd-exp-kpi-l', label); H(box, 'span', 'rpd-exp-kpi-n', val); H(box, 'span', 'rpd-exp-kpi-h', hint);
+      });
+    }
+
+    const tabBar = H(p, 'div', 'rpd-tabs rpd-exp-subtabs');
+    const subTabs = [
+      ['overview', hasRoadmap ? '结论与证据链' : '命题与结论', claimIdeas.length],
+      ...(todoIdeas.length ? [['todo', disp.todoTabLabel || '待补实验清单', todoIdeas.length]] : []),
+      ['runs', expData.grouped ? '实验明细与审计' : '实验配置与运行', expData.grouped ? expData.items.length : expData.allConfigs.length],
+      ['refs', 'Baseline 引用', uses.length]
+    ];
+    if (!subTabs.some(([k]) => k === viewState.sub)) viewState.sub = 'overview';
+    for (const [key, label, count] of subTabs) {
+      const b = H(tabBar, 'button', 'rpd-tab' + (viewState.sub === key ? ' is-active' : ''));
+      b.type = 'button'; H(b, 'span', '', label); H(b, 'span', 'rpd-tab-n', String(count));
+      b.addEventListener('click', () => { viewState.sub = key; draw(); });
+    }
+
+    if (viewState.sub === 'overview') renderIdeasList(p, item, claimIdeas, expData, openExp, viewState.focusClaim, clearFocus);
+    else if (viewState.sub === 'todo' && todoIdeas.length) renderBacklogView(p, item, todoIdeas, focusClaim, openExp);
+    else if (viewState.sub === 'runs') configSection(p, item, viewState);
+    else {
+      references(p, item);
+      const ungrouped = allRuns.filter(r => !r.config && r.owner === item.id);
+      if (ungrouped.length) {
+        const s = sec(p, '已认领但未归组到配置的运行');
+        ungrouped.forEach(r => { const row = H(s, 'div', 'rpd-row'); runLink(row, r); H(row, 'span', 'rpd-muted', statusOf(r)); });
+      }
+    }
+  }
+
+  const navHiddenKey = 'rpd-experiment-nav-hidden';
+  let navHidden = app.loadLocalStorage(navHiddenKey) === '1';
   function draw() {
-    c.empty(); const header = H(c, 'div', 'rpd-exp-heading'); H(header, 'h2', 'rpd-issue-h', '实验记录');
+    c.empty(); const header = H(c, 'div', 'rpd-exp-heading');
+    const titleGroup = H(header, 'div', 'rpd-exp-heading-left');
+    H(titleGroup, 'h2', 'rpd-issue-h', '实验记录');
+    const toggleNavBtn = btn(titleGroup, navHidden ? '显示左栏' : '隐藏左栏', 'rpd-ghost rpd-exp-nav-toggle', () => {
+      navHidden = !navHidden;
+      app.saveLocalStorage(navHiddenKey, navHidden ? '1' : '0');
+      workspace.classList.toggle('is-nav-hidden', navHidden);
+      toggleNavBtn.setText(navHidden ? '显示左栏' : '隐藏左栏');
+      toggleNavBtn.setAttribute('aria-pressed', String(navHidden));
+    });
+    toggleNavBtn.title = '隐藏或显示左侧论文与 Baseline 导航栏';
+    toggleNavBtn.setAttribute('aria-pressed', String(navHidden));
     const tools = H(header, 'div', 'rpd-tools');
     btn(tools, '认领运行', '', () => goTab('inbox'));
     btn(tools, '刷新', 'rpd-ghost', () => { loadExperiments(); render(); });
     if (shared.notice) H(c, 'p', 'rpd-warn', shared.notice);
-    const workspace = H(c, 'div', 'rpd-exp-layout'), nav = H(workspace, 'nav', 'rpd-exp-nav');
+    const workspace = H(c, 'div', 'rpd-exp-layout' + (navHidden ? ' is-nav-hidden' : '')), nav = H(workspace, 'nav', 'rpd-exp-nav');
     nav.setAttribute('aria-label', '实验记录导航');
     for (const [kind, title, entries] of [['paper', '我的论文', papers], ['baseline', '我复现的 Baseline', baselines]]) {
       const group = H(nav, 'section'); const h = H(group, 'div', 'rpd-exp-heading'); H(h, 'h3', '', title);
@@ -1184,15 +1836,15 @@ R.experiments = async c => {
       sourceLink(sources, selected.source, '原论文 ↗'); sourceLink(sources, selected.repo, '开源仓库 ↗');
       if (selected.folder) H(sources, 'span', 'rpd-muted', selected.folder);
       if (selected.kind === 'paper') paperView(p, selected);
-      else { originalResults(p, selected); configSection(p, selected); references(p, selected); }
+      else { originalResults(p, selected); configSection(p, selected, {}); references(p, selected); }
     } else empty(p, '从左侧添加一篇论文或一个已复现的 Baseline。');
     const legacy = H(c, 'details', 'rpd-exp-legacy');
     H(legacy, 'summary', '', '实验笔记 · ' + experiments.length);
     btn(legacy, '新建实验记录笔记', '', createExperimentRecord);
     experiments.forEach(e => { const row = H(legacy, 'div', 'rpd-row'); fileLink(row, e.path, e.title); H(row, 'span', 'rpd-muted', [e.status, e.server, e.summary].filter(Boolean).join(' · ')); });
     const notices = [...own.notices.map(r => ['本人论文', r]), ['复现配置组', repro], ['服务器运行', inbox]]
-      .filter(([, r]) => r.cachedAt || r.error);
-    if (notices.length) H(c, 'p', 'rpd-count', notices.map(([label, r]) => label + '：' + (r.cachedAt ? '离线缓存 ' + fmtTime(r.cachedAt) : r.error?.status === 404 ? '尚无后端记录' : errorText(r.error))).join('　'));
+      .filter(([, r]) => r.cachedAt || (r.error && r.error.status !== 404));
+    if (notices.length) H(c, 'p', 'rpd-count', notices.map(([label, r]) => label + '：' + (r.cachedAt ? '离线缓存 ' + fmtTime(r.cachedAt) : errorText(r.error))).join('　'));
   }
   draw();
 };
@@ -1645,6 +2297,10 @@ function libCard(el, p, redraw) {
   if (p.user.own) H(meta, 'span', 'rpd-tag accent', '本人论文');
   const bar = H(el, 'div', 'rpd-lib-bar');
   const tags = H(bar, 'div', 'rpd-lib-tags'); p.topics.forEach(t => H(tags, 'span', 'rpd-tag topic', t));
+  const codeFlag = CODE_FLAGS.find(flag => p.user.flags.includes(flag));
+  if (codeFlag) H(tags, 'span', 'rpd-tag ' + (codeFlag === CODE_FLAGS[0] ? 'accent' : 'warn'), codeFlag);
+  else if (p.urls?.code) H(tags, 'span', 'rpd-tag soft', '复现待审查');
+  if (p.user.flags.includes(BASELINE_FLAG)) H(tags, 'span', 'rpd-tag accent', BASELINE_FLAG);
   const acts = H(bar, 'div', 'rpd-lib-acts');
   star(acts, p.user.rating, v => patchUser(p, { rating: v }, async () => { await loadQueue(); redraw(); }), '我的评价');  // 打了分就移出阅读队列
   statusPicker(acts, p, redraw);
@@ -1654,6 +2310,14 @@ function libCard(el, p, redraw) {
   const more = H(acts, 'details', 'rpd-more'); H(more, 'summary', '', '更多');
   const menu = H(more, 'div', 'rpd-more-menu');
   chip(menu, p.user.own ? '✓ 本人论文' : '标为本人论文', p.user.own, () => patchUser(p, { own: !p.user.own }, redraw));
+  CODE_FLAGS.forEach(flag => chip(menu, flag, codeFlag === flag, () => {
+    const flags = p.user.flags.filter(current => !CODE_FLAGS.includes(current));
+    if (flag !== codeFlag) flags.push(flag);
+    patchUser(p, { flags }, redraw);
+  }));
+  const hasBaseline = p.user.flags.includes(BASELINE_FLAG);
+  chip(menu, BASELINE_FLAG, hasBaseline, () => patchUser(p, { flags: hasBaseline
+    ? p.user.flags.filter(flag => flag !== BASELINE_FLAG) : [...p.user.flags, BASELINE_FLAG] }, redraw));
   deepReadButtons(menu, el, p);
   btn(menu, p.hasPdf ? '替换 PDF' : '上传 PDF', 'rpd-ghost', async () => { if (await uploadPdf(p.id)) { p.hasPdf = true; redraw(); } });
   if (titleKnown(p)) titleTools(menu, p, redraw);
@@ -2277,7 +2941,14 @@ function updateStatus() {
   pill.toggleClass('on', online === true); pill.toggleClass('off', online !== true); pillHint.setText(CFG.apiBase);
 }
 const nav = H(root, 'nav', 'rpd-nav');
-const NAV = [['home', '首页'], ['experiments', '实验记录'], ['issue', '论文推荐'], ['watched', '关注论文'], ['teams', '团队'], ['lib', '论文库'], ['schemes', '分类'], ['must', '经典与必读'], ['map', '领域发展史'], ['hot', '热点'], ['res', '结果表'], ['idea', 'IDEA'], ['research', '我的研究领域'], ['rep', '报告'], ['inbox', '待认领'], ['set', '设置']];
+const NAV_GROUPS = [
+  { id: 'daily', label: '每日追踪', desc: '看今日精选、推荐、社区热点与周报', tabs: [['home', '首页'], ['issue', '论文推荐'], ['hot', '热点'], ['rep', '报告']] },
+  { id: 'library', label: '论文管理', desc: '管自己的论文池、关注清单、自定义分类与团队', tabs: [['lib', '论文库'], ['watched', '关注论文'], ['schemes', '分类'], ['teams', '团队']] },
+  { id: 'knowledge', label: '领域知识', desc: '查经典必读、发展史、结果表与研究空白', tabs: [['must', '经典与必读'], ['map', '领域发展史'], ['res', '结果表'], ['idea', 'IDEA']] },
+  { id: 'experiments', label: '实验工作台', desc: '管论文实验、Baseline 复现与服务器待认领运行', tabs: [['experiments', '实验记录'], ['inbox', '待认领']] },
+  { id: 'config', label: '研究与设置', desc: '维护关键词树、本人论文、推荐参数与模型引擎', tabs: [['research', '我的研究领域'], ['set', '设置']] }
+];
+const groupOfTab = key => NAV_GROUPS.find(g => g.tabs.some(([k]) => k === key)) || NAV_GROUPS[0];
 const content = H(root, 'main', 'rpd-content');
 toastEl = document.body.createDiv({ cls: 'rpd-toast' });
 function goTab(next) {
@@ -2307,8 +2978,24 @@ async function render() {
   const sp = scroller();
   const savedTop = window.__rpdScroll[TAB_KEY]?.tab === tab ? window.__rpdScroll[TAB_KEY].top : 0;
   const keepTop = renderedTab === tab ? (sp ? sp.scrollTop : savedTop) : (renderedTab === null ? savedTop : 0);
-  titleEl.setText(tab === 'research' ? '我的研究领域' : '实验工作台 · 论文');
-  nav.empty(); NAV.forEach(([k, l]) => { const b = H(nav, 'button', 'rpd-navbtn' + (tab === k ? ' is-active' : ''), l); b.type = 'button'; b.addEventListener('click', () => goTab(k)); });
+  const currentGroup = groupOfTab(tab);
+  titleEl.setText(tab === 'research' ? '我的研究领域' : '论文工作台 · ' + currentGroup.label);
+  nav.empty();
+  const groupRow = H(nav, 'div', 'rpd-nav-groups');
+  NAV_GROUPS.forEach(g => {
+    const active = g.id === currentGroup.id;
+    const b = H(groupRow, 'button', 'rpd-navgroup' + (active ? ' is-active' : ''), g.label);
+    b.type = 'button';
+    b.title = g.desc;
+    b.addEventListener('click', () => { if (!active) goTab(g.tabs[0][0]); });
+  });
+  const subRow = H(nav, 'div', 'rpd-nav-sub');
+  currentGroup.tabs.forEach(([k, l]) => {
+    const b = H(subRow, 'button', 'rpd-navbtn' + (tab === k ? ' is-active' : ''), l);
+    b.type = 'button';
+    b.addEventListener('click', () => goTab(k));
+  });
+  H(subRow, 'span', 'rpd-nav-desc', currentGroup.desc);
   const next = createDiv({ cls: 'rpd-page' });
   const loading = content.childElementCount ? null : H(content, 'p', 'rpd-muted', '加载中…');
   try { await R[tab](next); } catch (e) { empty(next, '页面出错：' + e.message); console.error(e); }
